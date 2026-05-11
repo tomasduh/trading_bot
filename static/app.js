@@ -10,11 +10,52 @@ let allTrades       = [];
 let tradeFilter     = "";
 
 const STALE_THRESHOLD_MS = 30_000;  // sin heartbeat 30s → mostrar "stale"
-// Token leído de localStorage. Setear desde la consola del browser:
-//   localStorage.setItem('dashboard_token', 'tu-token-aqui')
-const DASHBOARD_TOKEN = (typeof localStorage !== 'undefined' && localStorage.getItem('dashboard_token')) || "";
+
+// Token de auth — se acepta vía:
+//   1) URL: ?token=XXX  (se guarda en localStorage y se limpia de la URL)
+//   2) localStorage.setItem('dashboard_token', 'XXX')
+//   3) prompt si no hay token
+function _resolveToken() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const fromUrl = params.get('token');
+    if (fromUrl) {
+      localStorage.setItem('dashboard_token', fromUrl);
+      // Limpiar el token de la URL para no dejarlo en historial
+      params.delete('token');
+      const newUrl = window.location.pathname +
+        (params.toString() ? '?' + params.toString() : '') +
+        window.location.hash;
+      window.history.replaceState({}, '', newUrl);
+      return fromUrl;
+    }
+    const fromStorage = localStorage.getItem('dashboard_token');
+    if (fromStorage) return fromStorage;
+    // Si no hay token, pedirlo (solo una vez por sesión)
+    const entered = window.prompt('Dashboard token requerido:');
+    if (entered) {
+      localStorage.setItem('dashboard_token', entered.trim());
+      return entered.trim();
+    }
+  } catch (e) { console.warn('token resolver error', e); }
+  return "";
+}
+const DASHBOARD_TOKEN = _resolveToken();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Escapa caracteres HTML especiales para evitar XSS al insertar texto
+ * de origen externo (log lines del servidor) en innerHTML.
+ */
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g,  '&amp;')
+    .replace(/</g,  '&lt;')
+    .replace(/>/g,  '&gt;')
+    .replace(/"/g,  '&quot;')
+    .replace(/'/g,  '&#39;');
+}
 
 const fmt = (n, d = 2) => n == null ? '—'
   : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -215,7 +256,11 @@ function formatLogLine(line) {
   else if (line.includes('[WARNING]') || line.includes('[CRITICAL]')) cls += ' warn';
   else if (line.includes('[INFO]')) cls += ' info';
 
-  const h = line
+  // Escapar HTML ANTES de inyectar en el DOM para evitar XSS.
+  // Las regex de coloreado solo añaden spans con clases hardcodeadas — seguro.
+  const safe = escapeHtml(line);
+
+  const h = safe
     .replace(/(Abriendo BUY|Trade.*abierto)/g, '<span class="text-emerald-400 font-semibold">$1</span>')
     .replace(/(Cerrando|STOP_LOSS|TAKE_PROFIT|TRAILING_STOP)/g, '<span class="text-amber-400">$1</span>')
     .replace(/(\+[\d.]+\s*USDT)/g, '<span class="pnl-pos">$1</span>')

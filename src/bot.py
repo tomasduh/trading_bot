@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from src import config, data_fetcher, strategy, logger as log_setup
 from src.database import init_db, Candle, Signal as DbSignal, get_session
 from src.executor import TradeExecutor
-from src import indicators, analyst, alerts
+from src import indicators, analyst, alerts, reconciler
 from src import alpaca_fetcher
 from src.data_fetcher import DataFetchError, FatalDataFetchError
 
@@ -188,12 +188,29 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
         logger.error(f"  [{symbol}] Error inesperado: {e}", exc_info=True)
 
 
+def _ping_watchdog():
+    """Ping a healthchecks.io al final de cada ciclo exitoso."""
+    if not config.HC_PING_URL:
+        return
+    try:
+        import requests
+        requests.get(config.HC_PING_URL, timeout=5)
+        logger.debug("Watchdog ping OK")
+    except Exception as e:
+        logger.warning(f"Watchdog ping falló: {e}")
+
+
 def run_cycle(executor: TradeExecutor):
     if is_paused():
         logger.info("⏸  Bot pausado (existe data/.paused) — saltando ciclo.")
         return
 
     logger.info("─" * 55)
+
+    # ── Reconciliación: DB vs exchange ────────────────────────────────────────
+    # Verifica que los trades "abiertos" en DB coincidan con posiciones reales.
+    # Solo loguea — no cierra posiciones automáticamente.
+    reconciler.reconcile_all(executor)
 
     # ── Crypto ───────────────────────────────────────────────────────────────
     try:
@@ -217,6 +234,9 @@ def run_cycle(executor: TradeExecutor):
             logger.info("[STOCKS] Mercado cerrado — esperando apertura (9:30 ET)")
     except Exception as e:
         logger.warning(f"[STOCKS] Error: {e}")
+
+    # ── Watchdog ping ─────────────────────────────────────────────────────────
+    _ping_watchdog()
 
 
 def main():

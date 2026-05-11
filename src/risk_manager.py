@@ -94,11 +94,23 @@ def check_take_profit(entry_price: float, current_price: float) -> bool:
     return current_price >= take_profit_price(entry_price)
 
 
-def pnl(entry_price: float, exit_price: float, quantity: float) -> tuple[float, float]:
-    """Devuelve (pnl_usdt, pnl_pct)."""
-    pnl_usdt = (exit_price - entry_price) * quantity
-    pnl_pct = (exit_price - entry_price) / entry_price
-    return round(pnl_usdt, 4), round(pnl_pct, 6)
+def pnl(entry_price: float, exit_price: float, quantity: float,
+        fee_pct: float = 0.0) -> tuple[float, float]:
+    """Devuelve (pnl_usdt, pnl_pct) neto de fees.
+
+    fee_pct se aplica sobre el notional de entrada Y salida (round-trip):
+      total_fees = (entry_price + exit_price) * quantity * fee_pct
+
+    En producción (executor.py) fee_pct=0 porque el exchange ya lo descuenta.
+    En backtest se pasa config.FEE_PCT[symbol] + config.SLIPPAGE_PCT para
+    simular el coste real de cada trade.
+    """
+    gross_pnl = (exit_price - entry_price) * quantity
+    fees      = (entry_price + exit_price) * quantity * fee_pct
+    net_pnl   = gross_pnl - fees
+    notional  = entry_price * quantity
+    net_pct   = net_pnl / notional if notional > 0 else 0.0
+    return round(net_pnl, 4), round(net_pct, 6)
 
 
 def trailing_stop_price(entry_price: float, highest_price: float) -> float | None:

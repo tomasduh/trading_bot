@@ -106,6 +106,10 @@ def run_backtest(symbol: str, timeframe: str = "30m",
 
     logger.info(f"Velas: {len(df)} | rango: {df.index[0]} → {df.index[-1]}")
 
+    # Fee round-trip: comisión del exchange + slippage estimado
+    # (0 para stocks Alpaca que no tienen comisión)
+    fee_pct = config.FEE_PCT.get(symbol, 0.0) + config.SLIPPAGE_PCT
+
     # Pre-calculamos todos los indicadores una sola vez
     df_ind = indicators.add_all(df)
 
@@ -168,7 +172,7 @@ def run_backtest(symbol: str, timeframe: str = "30m",
 
             if exit_price is not None:
                 pnl_usdt, pnl_pct = risk_manager.pnl(
-                    open_trade.entry_price, exit_price, open_trade.quantity)
+                    open_trade.entry_price, exit_price, open_trade.quantity, fee_pct)
                 open_trade.exit_time   = current_time
                 open_trade.exit_price  = exit_price
                 open_trade.exit_reason = exit_reason
@@ -198,7 +202,7 @@ def run_backtest(symbol: str, timeframe: str = "30m",
     if open_trade:
         last_price = float(df_ind.iloc[-1]["close"])
         pnl_usdt, pnl_pct = risk_manager.pnl(
-            open_trade.entry_price, last_price, open_trade.quantity)
+            open_trade.entry_price, last_price, open_trade.quantity, fee_pct)
         open_trade.exit_time = df_ind.index[-1].to_pydatetime()
         open_trade.exit_price = last_price
         open_trade.exit_reason = "END_OF_BACKTEST"
@@ -207,10 +211,11 @@ def run_backtest(symbol: str, timeframe: str = "30m",
         trades.append(open_trade)
         equity += pnl_usdt
 
-    return _summarize(symbol, timeframe, days, capital, equity, trades, equity_curve, df_ind)
+    return _summarize(symbol, timeframe, days, capital, equity, trades, equity_curve, df_ind, fee_pct)
 
 
-def _summarize(symbol, timeframe, days, capital, final_equity, trades, equity_curve, df) -> dict:
+def _summarize(symbol, timeframe, days, capital, final_equity, trades, equity_curve, df,
+               fee_pct: float = 0.0) -> dict:
     if not trades:
         return {
             "symbol": symbol, "timeframe": timeframe, "days": days,
@@ -281,6 +286,7 @@ def _summarize(symbol, timeframe, days, capital, final_equity, trades, equity_cu
         "max_drawdown_pct":round(max_dd_pct, 2),
         "sharpe_ratio":    round(sharpe, 2),
         "avg_duration_min":round(avg_dur, 1),
+        "fee_pct_used":    round(fee_pct * 100, 4),   # % por orden (entry + exit)
         "exit_reasons":    exit_reasons,
         "trades_sample":   [
             {**asdict(t),
@@ -316,6 +322,7 @@ def print_summary(r: dict):
     print(f"  Sharpe: {r['sharpe_ratio']}")
     print(f"  Duracion media: {r['avg_duration_min']:.0f} min")
     print(f"  Exits: {r['exit_reasons']}")
+    print(f"  Fee/slippage por trade: {r.get('fee_pct_used', 0):.4f}% × 2 lados")
     print("=" * 60)
 
 

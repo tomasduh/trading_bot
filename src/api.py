@@ -8,12 +8,16 @@ import csv
 import json
 import logging
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Header, Query
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, Header, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, PlainTextResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from src.config import BASE_DIR, CRYPTO_SYMBOLS, STOCK_SYMBOLS, TIMEFRAME, LOOP_INTERVAL_SECONDS
 from src.database import get_session, Trade, Signal as DbSignal, Candle
@@ -21,7 +25,23 @@ from src import analyst, ml_analyst
 
 logger = logging.getLogger("api")
 
-app = FastAPI(title="Trading Bot Dashboard")
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Arranca las tareas de background al iniciar la app (reemplaza @on_event)."""
+    asyncio.create_task(watch_log())
+    asyncio.create_task(watch_data())
+    asyncio.create_task(push_heartbeat())
+    yield
+    # cleanup al apagar (no hay nada que limpiar explícitamente)
+
+
+app = FastAPI(title="Trading Bot Dashboard", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 STATIC_DIR = BASE_DIR / "static"
 LOG_FILE   = BASE_DIR / "logs" / "bot.log"
@@ -57,11 +77,22 @@ def _check_auth(token: str | None):
         raise HTTPException(status_code=401, detail="Token inválido")
 
 
-def _check_origin(origin: str | None) -> bool:
-    """Valida que el Origin del WebSocket esté en la allowlist."""
+def _check_origin(origin: str | None, host: str | None = None) -> bool:
+    """Valida que el Origin del WebSocket esté en la allowlist O coincida con el Host.
+    Si no hay Origin (cliente no-browser), permitir cuando hay token (defensa en
+    profundidad: el token es el auth real, Origin es belt-and-suspenders)."""
     if not origin:
-        return False
-    return origin in ALLOWED_ORIGINS
+        # Sin Origin: requerir que el endpoint imponga el token (lo hace abajo)
+        return True
+    if origin in ALLOWED_ORIGINS:
+        return True
+    # Auto-permitir same-origin: si Host=tomas-bot-trading.fly.dev y Origin=https://tomas-bot-trading.fly.dev
+    if host:
+        same_origin_https = f"https://{host}"
+        same_origin_http  = f"http://{host}"
+        if origin == same_origin_https or origin == same_origin_http:
+            return True
+    return False
 
 
 # ── WebSocket manager ─────────────────────────────────────────────────────────
@@ -95,19 +126,38 @@ manager = ConnectionManager()
 # ── Watchers en background ────────────────────────────────────────────────────
 
 async def watch_log():
-    """Tail bot.log y broadcast cada línea nueva."""
-    pos = LOG_FILE.stat().st_size if LOG_FILE.exists() else 0
+    """Tail bot.log y broadcast cada línea nueva.
+
+    Usa inode tracking para detectar rotaciones de log correctamente:
+    - Truncamiento (size < pos) → reset posición
+    - Archivo reemplazado (inode distinto) → reabrir desde 0
+    Esto evita que al rotar el log el watcher siga leyendo el archivo viejo.
+    """
+    def _stat():
+        try:
+            s = LOG_FILE.stat()
+            return s.st_size, s.st_ino
+        except OSError:
+            return 0, None
+
+    pos, inode = _stat()
+
     while True:
         await asyncio.sleep(1)
         try:
             if not LOG_FILE.exists():
                 continue
-            size = LOG_FILE.stat().st_size
-            if size < pos:
-                pos = 0  # rotación detectada
+            size, new_inode = _stat()
+
+            # Rotación detectada: inode cambió O archivo fue truncado
+            if new_inode != inode or size < pos:
+                pos   = 0
+                inode = new_inode
+
             if size <= pos:
                 continue
-            with open(LOG_FILE, encoding="utf-8") as f:
+
+            with open(LOG_FILE, encoding="utf-8", errors="replace") as f:
                 f.seek(pos)
                 new_lines = f.read()
             pos = size
@@ -164,25 +214,22 @@ async def push_heartbeat():
             logger.warning("heartbeat error: %s", e)
 
 
-@app.on_event("startup")
-async def startup():
-    asyncio.create_task(watch_log())
-    asyncio.create_task(watch_data())
-    asyncio.create_task(push_heartbeat())
-
-
 # ── WebSocket endpoint ────────────────────────────────────────────────────────
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket, token: str | None = None):
     # Validar Origin contra allowlist (anti Cross-Site WebSocket Hijacking)
     origin = ws.headers.get("origin")
-    if not _check_origin(origin):
+    host   = ws.headers.get("host")
+    if not _check_origin(origin, host):
+        logger.warning("WS rechazado por Origin: origin=%r host=%r allowed=%r",
+                       origin, host, ALLOWED_ORIGINS)
         await ws.close(code=1008, reason="origin not allowed")
         return
     # Validar token
     if DASHBOARD_TOKEN:
         if token != DASHBOARD_TOKEN:
+            logger.warning("WS rechazado por token inválido (origin=%r)", origin)
             await ws.close(code=1008, reason="invalid token")
             return
     elif not ALLOW_NO_AUTH:
@@ -335,12 +382,14 @@ def _build_log(lines: int = 40) -> list:
 # ── REST endpoints ────────────────────────────────────────────────────────────
 
 @app.get("/")
-def root():
+@limiter.limit("60/minute")
+def root(request: Request):
     return FileResponse(str(STATIC_DIR / "index.html"))
 
 
 @app.get("/api/candles/{symbol:path}")
-def get_candles(symbol: str, limit: int = 100):
+@limiter.limit("60/minute")
+def get_candles(request: Request, symbol: str, limit: int = 100):
     # Validación simple: solo permite símbolos conocidos
     valid_symbols = set(CRYPTO_SYMBOLS) | set(STOCK_SYMBOLS)
     if symbol not in valid_symbols:
@@ -361,24 +410,28 @@ def get_candles(symbol: str, limit: int = 100):
 
 
 @app.get("/api/report")
-def get_report():
+@limiter.limit("30/minute")
+def get_report(request: Request):
     return analyst.generate_report()
 
 
 @app.get("/api/cycles")
-def get_cycles(limit: int = 500):
+@limiter.limit("30/minute")
+def get_cycles(request: Request, limit: int = 500):
     limit = max(1, min(limit, 5000))  # cap anti-DoS
     cycles = analyst.load_cycles()
     return cycles[-limit:]
 
 
 @app.get("/api/ml-report")
-def get_ml_report():
+@limiter.limit("10/minute")
+def get_ml_report(request: Request):
     return ml_analyst.evaluate_strategy()
 
 
 @app.get("/api/per-symbol")
-def per_symbol_stats():
+@limiter.limit("30/minute")
+def per_symbol_stats(request: Request):
     """Estadísticas por símbolo para tabla del dashboard."""
     with get_session() as s:
         trades = s.query(Trade).filter(Trade.status == "CLOSED").all()
@@ -415,7 +468,8 @@ def per_symbol_stats():
 
 
 @app.get("/api/export/trades.csv")
-def export_trades_csv():
+@limiter.limit("10/minute")
+def export_trades_csv(request: Request):
     """Descarga histórico de trades como CSV."""
     with get_session() as s:
         trades = s.query(Trade).order_by(Trade.created_at.desc()).all()
@@ -439,7 +493,8 @@ def export_trades_csv():
 
 
 @app.get("/api/export/cycles.csv")
-def export_cycles_csv():
+@limiter.limit("10/minute")
+def export_cycles_csv(request: Request):
     cycles = analyst.load_cycles()
     if not cycles:
         return PlainTextResponse("ts,price\n", media_type="text/csv")
@@ -469,7 +524,9 @@ def _check_csrf(content_type: str | None):
 
 
 @app.post("/api/pause")
-def pause_bot(authorization: str | None = Header(None),
+@limiter.limit("10/minute")
+def pause_bot(request: Request,
+              authorization: str | None = Header(None),
               content_type: str | None = Header(None)):
     _check_csrf(content_type)
     _check_auth(authorization)
@@ -480,7 +537,9 @@ def pause_bot(authorization: str | None = Header(None),
 
 
 @app.post("/api/resume")
-def resume_bot(authorization: str | None = Header(None),
+@limiter.limit("10/minute")
+def resume_bot(request: Request,
+               authorization: str | None = Header(None),
                content_type: str | None = Header(None)):
     _check_csrf(content_type)
     _check_auth(authorization)
@@ -491,7 +550,8 @@ def resume_bot(authorization: str | None = Header(None),
 
 
 @app.get("/api/health")
-def health():
+@limiter.limit("120/minute")
+def health(request: Request):
     # No revelamos config interna en healthcheck público
     return {"status": "ok"}
 

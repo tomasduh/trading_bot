@@ -5,7 +5,8 @@ def _utcnow() -> datetime:
     """Helper: UTC-aware datetime (reemplaza datetime.utcnow() deprecado)."""
     return datetime.now(timezone.utc)
 from sqlalchemy import (
-    create_engine, Column, Integer, Float, String, DateTime, Boolean, Text, event
+    create_engine, Column, Integer, Float, String, DateTime, Boolean, Text,
+    UniqueConstraint, event,
 )
 from sqlalchemy.orm import DeclarativeBase, Session
 from src.config import DB_PATH
@@ -38,6 +39,12 @@ class Base(DeclarativeBase):
 class Candle(Base):
     """Cada vela analizada por el bot."""
     __tablename__ = "candles"
+    __table_args__ = (
+        # UNIQUE evita duplicados si el bot procesa la misma vela dos veces
+        # (ej: reinicio en medio de un ciclo). La migración en init_db() lo
+        # crea también en DBs ya existentes de forma idempotente.
+        UniqueConstraint("symbol", "timestamp", name="uq_candle_symbol_ts"),
+    )
 
     id = Column(Integer, primary_key=True)
     symbol = Column(String, nullable=False)
@@ -101,16 +108,34 @@ class Trade(Base):
 
 
 def _migrate_add_columns():
-    """Migración idempotente: añade columnas nuevas a tablas existentes."""
+    """Migraciones idempotentes: columnas nuevas + índices en tablas existentes."""
     with engine.connect() as conn:
+        # ── Trades: columna highest_price ────────────────────────────────────
         try:
             cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(trades)").fetchall()]
             if "highest_price" not in cols:
                 conn.exec_driver_sql("ALTER TABLE trades ADD COLUMN highest_price FLOAT")
                 conn.commit()
         except Exception:
-            # Tabla no existe aún, create_all la creará con la columna
-            pass
+            pass   # tabla no existe aún, create_all la creará completa
+
+        # ── Candles: UNIQUE index (symbol, timestamp) ─────────────────────────
+        # Primero deduplica (conserva el row con id más bajo por (symbol, ts))
+        # para que el CREATE UNIQUE INDEX no falle.
+        try:
+            conn.exec_driver_sql("""
+                DELETE FROM candles
+                WHERE id NOT IN (
+                    SELECT MIN(id) FROM candles GROUP BY symbol, timestamp
+                )
+            """)
+            conn.exec_driver_sql("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_candle_symbol_ts
+                ON candles(symbol, timestamp)
+            """)
+            conn.commit()
+        except Exception:
+            pass   # tabla no existe aún o ya tiene el índice
 
 
 def init_db():

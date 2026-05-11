@@ -145,6 +145,9 @@ def _run_backtest_impl(symbol, timeframe, days, capital, disable_signal_exit=Fal
     df_ind = indicators.add_all(df)
     warmup = max(config.EMA_TREND_SLOW + 5, 50)
 
+    # Fee round-trip: comisión del exchange + slippage estimado
+    fee_pct = config.FEE_PCT.get(symbol, 0.0) + config.SLIPPAGE_PCT
+
     trades = []
     open_trade = None
     equity_curve = []
@@ -184,7 +187,7 @@ def _run_backtest_impl(symbol, timeframe, days, capital, disable_signal_exit=Fal
 
             if exit_price is not None:
                 pnl_usdt, pnl_pct = risk_manager.pnl(
-                    open_trade.entry_price, exit_price, open_trade.quantity)
+                    open_trade.entry_price, exit_price, open_trade.quantity, fee_pct)
                 open_trade.exit_time = current_time
                 open_trade.exit_price = exit_price
                 open_trade.exit_reason = exit_reason
@@ -211,7 +214,7 @@ def _run_backtest_impl(symbol, timeframe, days, capital, disable_signal_exit=Fal
     if open_trade:
         last_price = float(df_ind.iloc[-1]["close"])
         pnl_usdt, pnl_pct = risk_manager.pnl(
-            open_trade.entry_price, last_price, open_trade.quantity)
+            open_trade.entry_price, last_price, open_trade.quantity, fee_pct)
         open_trade.exit_time = df_ind.index[-1].to_pydatetime()
         open_trade.exit_price = last_price
         open_trade.exit_reason = "END_OF_BACKTEST"

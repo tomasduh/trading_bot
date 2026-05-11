@@ -84,5 +84,23 @@ DB_PATH = BASE_DIR / "data" / "trades.db"
 LOG_DIR = BASE_DIR / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
+# ── Fees y slippage (realismo en backtest) ────────────────────────────────────
+# Binance spot: 0.1% por lado → 0.2% round-trip.
+# Alpaca paper: sin comisión, pero slippage estimado conservador.
+FEE_PCT: dict = {
+    "BTC/USDT": 0.001,   # 0.1% Binance spot
+    "ETH/USDT": 0.001,
+    "SOL/USDT": 0.001,
+    "BNB/USDT": 0.001,
+    # Stocks Alpaca: 0 (comisión cero)
+}
+SLIPPAGE_PCT = 0.0005    # 0.05% estimado conservador por orden (ambos lados)
+
+# ── Watchdog externo ──────────────────────────────────────────────────────────
+# URL de healthchecks.io — el bot hace ping al final de cada ciclo.
+# Si falta el ping N minutos, healthchecks.io manda alerta.
+# Dejar vacío para deshabilitar.
+HC_PING_URL = os.getenv("HC_PING_URL", "")
+
 # ── Loop ───────────────────────────────────────────────────────────────────────
 LOOP_INTERVAL_SECONDS = 60 * 30  # cada 30 minutos (igual que el timeframe)
