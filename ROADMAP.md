@@ -6,18 +6,36 @@ Pasos a seguir, ordenados por prioridad y dificultad. Cada paso incluye **qué h
 
 ## 📍 Estado actual (snapshot)
 
+> **Última actualización:** 2026-05-11 — Sprints Semana 1 y Semana 2 completados.
+
 | | |
 |---|---|
 | Plataforma | Fly.io (Frankfurt) — 24/7 |
 | Mercados | 4 crypto (Binance Testnet) + 7 stocks (Alpaca Paper) |
-| Estrategia | RSI + MACD + Bollinger + filtro tendencia (EMA21/50 + ADX) |
+| Estrategia | RSI + MACD + Bollinger + filtro tendencia (EMA21/50 + ADX) + ATR disponible |
 | Timeframe | 30m |
 | Risk per trade | 1% del capital |
-| SL / TP | 2% / 4% (ratio 2:1) |
+| SL / TP | 2% / 4% fijo (ratio 2:1) — ATR-based disponible con `USE_ATR_STOPS=True` |
 | Trailing stop | Desactivado (optimizer demostró que perjudica) |
 | Signal exit | Solo si pérdida real > 0.2% (buffer) |
-| Tests | 28/28 ✅ |
+| Fees en backtest | ✅ 0.1% Binance + 0.05% slippage (round-trip) |
+| Walk-forward | ✅ `python -m src.walk_forward BTC/USDT` |
+| Circuit breaker | ✅ DD diario 3% / pérdida total 10% / 5 pérdidas consecutivas |
+| Reconciliador | ✅ DB vs exchange al inicio de cada ciclo |
+| Watchdog externo | ✅ healthchecks.io via `HC_PING_URL` env var |
+| Rate limiting | ✅ slowapi 60-200/min por endpoint |
 | Auth dashboard | Token obligatorio + Origin check + CSRF protection |
+| Tests | 28/28 ✅ |
+
+### 📦 Commits recientes
+
+| Commit | Descripción |
+|---|---|
+| `7bba1b3` | feat: Sprint Semana 2 — walk-forward, ATR stops, circuit breaker |
+| `5a12e7a` | feat: Sprint Semana 1 — fees en backtest, reconciliador, watchdog, quick wins |
+| `393f2aa` | docs: ROADMAP.md inicial |
+| `5457db9` | Hardening: auth obligatoria, .gitignore, fix bugs riesgo/SIGNAL exit |
+| `fd79c43` | first commit (limpio, sin .env en historial) |
 
 ---
 
@@ -25,7 +43,7 @@ Pasos a seguir, ordenados por prioridad y dificultad. Cada paso incluye **qué h
 
 > **Por qué primero**: hoy nuestras métricas (Sharpe, PnL, profit factor) están **sobreestimadas** porque no contemplamos fees ni slippage. Cualquier decisión de ir a LIVE necesita esto resuelto.
 
-### 1.1 Agregar fees al backtest
+### ✅ 1.1 Agregar fees al backtest — **COMPLETADO** (commit `5a12e7a`)
 
 **Qué:** Restar la comisión real del exchange en cada trade simulado.
 
@@ -64,7 +82,7 @@ Comparar PnL antes/después. Esperamos un **degrade de ~0.4% absoluto** en cada 
 
 ---
 
-### 1.2 Walk-forward validation
+### ✅ 1.2 Walk-forward validation — **COMPLETADO** (commit `7bba1b3`)
 
 **Qué:** En lugar de backtest sobre 90 días continuos, dividir en N ventanas y re-entrenar/optimizar en cada una para evitar overfitting.
 
@@ -81,7 +99,7 @@ Comparar PnL antes/después. Esperamos un **degrade de ~0.4% absoluto** en cada 
 
 ## 🎯 Fase 2 — Mejoras de estrategia (prioridad MEDIA-ALTA)
 
-### 2.1 Position sizing por ATR (Average True Range)
+### ✅ 2.1 ATR-based stops — **COMPLETADO** (commit `7bba1b3`)
 
 **Qué:** En vez de SL fijo del 2%, usar `SL = entry - k·ATR(14)` donde k≈2.
 
@@ -111,7 +129,7 @@ ATR_MULTIPLIER_TP = 4.0  # ratio 2:1 mantenido
 
 ---
 
-### 2.2 Multi-timeframe (4h confirmación, 30m entrada)
+### ⏳ 2.2 Multi-timeframe (4h confirmación, 30m entrada)
 
 **Qué:** Usar timeframe 4h para detectar tendencia macro, 30m para timing de entrada.
 
@@ -131,7 +149,7 @@ def evaluate_with_macro(df_30m, df_4h):
 
 ---
 
-### 2.3 Régimen de mercado (trending / ranging / choppy)
+### ⏳ 2.3 Régimen de mercado (trending / ranging / choppy)
 
 **Qué:** Clasificar el estado del mercado y operar solo cuando sea favorable.
 
@@ -161,7 +179,7 @@ def detect_regime(df):
 
 > **Pre-requisito:** tener acumulados **≥ 200 trades cerrados** para entrenar con confianza. Actualmente tenemos 48h+ de cycles loggeados — empezar a recolectar features ya.
 
-### 3.1 Loguear feature vectors completos
+### ⏳ 3.1 Loguear feature vectors completos
 
 **Qué:** Cada vez que el bot evalúa, guardar **todas las features** que generó (no solo el resultado).
 
@@ -185,7 +203,7 @@ Loguear en archivo separado: `data/features.jsonl`
 
 ---
 
-### 3.2 ML Meta-classifier con LightGBM
+### ⏳ 3.2 ML Meta-classifier con LightGBM
 
 **Qué:** Entrenar un modelo que prediga `P(trade_es_ganador)` dadas las features.
 
@@ -229,7 +247,7 @@ python -m src.train_ml --features data/features.jsonl --trades data/trades.db
 
 ---
 
-### 3.3 Re-entrenamiento automático
+### ⏳ 3.3 Re-entrenamiento automático
 
 **Qué:** Cada N días, retrain con datos nuevos.
 
@@ -243,7 +261,7 @@ python -m src.train_ml --features data/features.jsonl --trades data/trades.db
 
 ## 🛡️ Fase 4 — Robustez de producción (CRÍTICO antes de LIVE)
 
-### 4.1 Reconciliación periódica con exchange
+### ✅ 4.1 Reconciliación periódica con exchange — **COMPLETADO** (commit `5a12e7a`)
 
 **Qué:** Cada N ciclos, comparar trades abiertos en DB vs órdenes/posiciones en exchange.
 
@@ -267,7 +285,7 @@ def reconcile(executor, fetcher):
 
 ---
 
-### 4.2 Circuit breaker server-side
+### ✅ 4.2 Circuit breaker server-side — **COMPLETADO** (commit `7bba1b3`)
 
 **Qué:** Pausa automática del bot si:
 - Drawdown diario > 3%
@@ -295,7 +313,7 @@ if should_pause:
 
 ---
 
-### 4.3 Cap global de exposición
+### ⏳ 4.3 Cap global de exposición
 
 **Qué:** Hoy `MAX_OPEN_TRADES=1` es por símbolo. Si los 4 cryptos dan BUY simultáneamente, abrimos 4 trades = 4% de exposición sin tracking agregado.
 
@@ -317,7 +335,7 @@ def total_exposure_pct(self, capital):
 
 ---
 
-### 4.4 Watchdog externo
+### ✅ 4.4 Watchdog externo — **COMPLETADO** (commit `5a12e7a`)
 
 **Qué:** Servicio externo que verifica que el bot esté vivo y operando, y alerta si se cuelga.
 
@@ -337,7 +355,7 @@ requests.get(f"https://hc-ping.com/{HC_UUID}", timeout=5)
 
 ---
 
-### 4.5 Backups automáticos de la DB
+### ⏳ 4.5 Backups automáticos de la DB
 
 **Qué:** Snapshot diario del SQLite a S3 / Backblaze / GitHub.
 
@@ -356,8 +374,8 @@ sqlite3 data/trades.db ".backup data/backup-$(date +%F).db"
 
 ### Checklist obligatorio
 
-- [ ] **Fase 1 completa** (fees + slippage + walk-forward)
-- [ ] **Fase 4 completa** (reconciliación + circuit breaker + watchdog)
+- [x] **Fase 1 completa** (fees + slippage ✅ + walk-forward ✅)
+- [ ] **Fase 4 completa** (reconciliación ✅ + circuit breaker ✅ + watchdog ✅ + cap exposición ⏳ + backups ⏳)
 - [ ] **2FA o IP allowlist** en el dashboard
 - [ ] **Binance API keys** con:
   - ✅ Read enabled
@@ -413,47 +431,49 @@ fly secrets set BINANCE_API_KEY=... BINANCE_SECRET=... --app tomas-bot-trading
 
 ## 📝 Tareas técnicas pequeñas (quick wins)
 
-| Tarea | Archivo | Esfuerzo |
-|---|---|---|
-| Migrar `@app.on_event("startup")` → `lifespan` | `src/api.py:143` | 30min |
-| Fix `watch_log` rotation con inode tracking | `src/api.py:73-96` | 1h |
-| UNIQUE index en `Candle(symbol, timestamp)` | `src/database.py` + migración | 1h |
-| Sanitizar `innerHTML` → `textContent` en frontend | `static/app.js` | 1h |
-| Audit log de pause/resume/orders | `src/database.py` + `src/api.py` | 2h |
-| Rate limiting con `slowapi` | `src/api.py` | 1h |
-| Tests para `executor.close_trade` con mock | `tests/test_executor.py` (nuevo) | 2h |
-| Tests para `alpaca_fetcher` | `tests/test_alpaca.py` (nuevo) | 2h |
+| Estado | Tarea | Archivo | Esfuerzo |
+|---|---|---|---|
+| ✅ | Migrar `@app.on_event("startup")` → `lifespan` | `src/api.py` | 30min |
+| ✅ | Fix `watch_log` rotation con inode tracking | `src/api.py` | 1h |
+| ✅ | UNIQUE index en `Candle(symbol, timestamp)` + migración | `src/database.py` | 1h |
+| ✅ | Sanitizar `innerHTML` con `escapeHtml()` en frontend | `static/app.js` | 1h |
+| ✅ | Rate limiting con `slowapi` | `src/api.py` | 1h |
+| ⏳ | Audit log de pause/resume/orders | `src/database.py` + `src/api.py` | 2h |
+| ⏳ | Tests para `executor.close_trade` con mock | `tests/test_executor.py` (nuevo) | 2h |
+| ⏳ | Tests para `alpaca_fetcher` | `tests/test_alpaca.py` (nuevo) | 2h |
 
 ---
 
 ## 🗓️ Cronograma sugerido
 
-### Semana 1 (siguiente sprint)
-- Fase 1.1: Fees + slippage en backtest
-- Fase 4.1: Reconciliación
-- Fase 4.4: Watchdog externo
+### ✅ Semana 1 — COMPLETADA
+- ✅ Fase 1.1: Fees + slippage en backtest
+- ✅ Fase 4.1: Reconciliación
+- ✅ Fase 4.4: Watchdog externo
+- ✅ Quick wins: lifespan, inode tracking, rate limiting, UNIQUE index, escapeHtml
 
-### Semana 2
-- Fase 1.2: Walk-forward
-- Fase 2.1: ATR-based sizing
-- Fase 4.2: Circuit breaker
+### ✅ Semana 2 — COMPLETADA
+- ✅ Fase 1.2: Walk-forward validation
+- ✅ Fase 2.1: ATR-based stops
+- ✅ Fase 4.2: Circuit breaker
 
-### Semana 3
-- Fase 2.2: Multi-timeframe
-- Fase 3.1: Logging features completas
+### ⏳ Semana 3 — PRÓXIMA
+- Fase 2.2: Multi-timeframe (4h confirmación, 30m entrada)
+- Fase 3.1: Logging features completas → `data/features.jsonl`
 - Fase 4.3: Cap exposición global
 
 ### Semana 4
+- Fase 2.3: Régimen de mercado (trending / ranging / choppy)
 - Fase 3.2: ML meta-classifier (training)
-- Quick wins (tareas pequeñas)
+- Quick wins restantes (test_executor, test_alpaca, audit log)
 
 ### Semana 5-6
-- Fase 3.2: ML integration + backtest
-- Fase 4.5: Backups
-- Stress test
+- Fase 3.2: ML integration + backtest comparativo
+- Fase 4.5: Backups automáticos DB
+- Stress test en testnet
 
 ### Semana 7-8
-- Fase 5: Pre-LIVE checklist
+- Fase 5: Pre-LIVE checklist completo
 - Soft launch con USD 100
 
 ---
@@ -492,4 +512,6 @@ fly secrets set BINANCE_API_KEY=... BINANCE_SECRET=... --app tomas-bot-trading
 
 ---
 
-_Documento vivo — actualizar después de cada fase completada._
+_Documento vivo — se actualiza automáticamente al finalizar cada sprint._
+
+**Progreso global:** 8/18 tareas completadas (Fases 1 ✅, 2.1 ✅, 4.1 ✅, 4.2 ✅, 4.4 ✅ + 5 quick wins ✅)
