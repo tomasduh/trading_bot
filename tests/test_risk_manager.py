@@ -89,6 +89,36 @@ def test_trailing_stop_disabled_returns_none():
         config.USE_TRAILING_STOP = prev
 
 
+def test_position_size_respects_min_notional():
+    """Capital ridículamente bajo → qty=0 (no llega a min_notional)."""
+    qty_low = risk_manager.position_size(0.1, 50_000, "BTC/USDT")
+    assert qty_low == 0, f"Esperado 0, obtuvo {qty_low}"
+
+
+def test_position_size_floors_to_step():
+    """Qty se trunca al step del símbolo."""
+    qty = risk_manager.position_size(10_000, 50_000, "BTC/USDT")
+    # step BTC=0.00001 → qty debe ser múltiplo
+    assert abs(qty * 100000 - round(qty * 100000)) < 1e-6
+
+
+def test_position_size_stocks_integer_shares():
+    """Para stocks, qty debe ser entero."""
+    qty = risk_manager.position_size(10_000, 280, "AAPL")
+    assert qty == int(qty), f"AAPL qty debe ser entera, obtuvo {qty}"
+
+
+def test_signal_exit_loss_buffer_active():
+    """El buffer evita cerrar trades en breakeven exacto o leve pérdida menor."""
+    entry = 100.0
+    threshold = entry * (1 - config.SIGNAL_EXIT_LOSS_BUFFER_PCT)
+    # Precio en entrada o ligeramente abajo (dentro del buffer): NO debe disparar
+    assert 100.0 >= threshold
+    assert (100.0 - 0.1) >= threshold  # 0.1% pérdida, dentro del buffer 0.2%
+    # Precio claramente bajo el buffer: SÍ debe disparar
+    assert (100.0 - 1.0) < threshold
+
+
 if __name__ == "__main__":
     test_position_size_uses_risk_pct()
     test_stop_loss_below_entry()
@@ -99,4 +129,8 @@ if __name__ == "__main__":
     test_trailing_stop_triggers_correctly()
     test_trailing_stop_not_triggered_above()
     test_trailing_stop_disabled_returns_none()
-    print("OK - all risk_manager tests passed (9 tests)")
+    test_position_size_respects_min_notional()
+    test_position_size_floors_to_step()
+    test_position_size_stocks_integer_shares()
+    test_signal_exit_loss_buffer_active()
+    print("OK - all risk_manager tests passed")

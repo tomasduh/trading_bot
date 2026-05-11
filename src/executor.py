@@ -45,9 +45,16 @@ class TradeExecutor:
             logger.warning(f"[{symbol}] Ya hay trade abierto. Ignorando BUY.")
             return None
 
-        qty = risk_manager.position_size(capital_usdt, signal.price)
-        sl  = risk_manager.stop_loss_price(signal.price)
-        tp  = risk_manager.take_profit_price(signal.price)
+        qty = risk_manager.position_size(capital_usdt, signal.price, symbol)
+        sl  = risk_manager.stop_loss_price(signal.price, symbol)
+        tp  = risk_manager.take_profit_price(signal.price, symbol)
+
+        if qty <= 0:
+            logger.warning(
+                f"[{symbol}] Qty calculada = 0 (capital {capital_usdt:.2f}, "
+                f"price {signal.price}, min_notional no alcanzado). Ignorando BUY."
+            )
+            return None
 
         logger.info(f"[{symbol}] Abriendo BUY {qty} @ {signal.price:,.2f} | SL={sl:,.2f} TP={tp:,.2f}")
 

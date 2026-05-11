@@ -159,9 +159,10 @@ def run_backtest(symbol: str, timeframe: str = "30m",
                 exit_reason = "TAKE_PROFIT"
 
             # 1d. SELL signal cierra al close de la vela
-            # Con SIGNAL_EXIT_ONLY_IN_LOSS: solo cierra si el trade está en pérdida
+            # Con SIGNAL_EXIT_ONLY_IN_LOSS: solo cierra si el trade está en pérdida real (con buffer)
             if exit_price is None and signal.type == "SELL":
-                if not config.SIGNAL_EXIT_ONLY_IN_LOSS or close <= open_trade.entry_price:
+                loss_threshold = open_trade.entry_price * (1 - config.SIGNAL_EXIT_LOSS_BUFFER_PCT)
+                if not config.SIGNAL_EXIT_ONLY_IN_LOSS or close < loss_threshold:
                     exit_price  = close
                     exit_reason = "SIGNAL"
 
@@ -180,14 +181,16 @@ def run_backtest(symbol: str, timeframe: str = "30m",
 
         # 2. Si no hay trade y hay BUY, abre al open de la vela
         if open_trade is None and signal.type == "BUY":
-            qty = risk_manager.position_size(equity, live_price)
+            qty = risk_manager.position_size(equity, live_price, symbol)
+            if qty <= 0:
+                continue
             open_trade = SimTrade(
                 symbol=symbol,
                 entry_time=current_time,
                 entry_price=live_price,
                 quantity=qty,
-                stop_loss=risk_manager.stop_loss_price(live_price),
-                take_profit=risk_manager.take_profit_price(live_price),
+                stop_loss=risk_manager.stop_loss_price(live_price, symbol),
+                take_profit=risk_manager.take_profit_price(live_price, symbol),
                 highest_price=live_price,
             )
 

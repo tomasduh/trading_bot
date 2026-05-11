@@ -28,16 +28,40 @@ LOG_FILE   = BASE_DIR / "logs" / "bot.log"
 PAUSE_FILE = BASE_DIR / "data" / ".paused"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# ── Auth (opcional, vía DASHBOARD_TOKEN env var) ──────────────────────────────
+# ── Auth (obligatoria vía DASHBOARD_TOKEN env var) ────────────────────────────
 DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "").strip()
+ALLOW_NO_AUTH   = os.getenv("DASHBOARD_ALLOW_NO_AUTH", "").lower() == "true"
+
+if not DASHBOARD_TOKEN and not ALLOW_NO_AUTH:
+    logger.warning(
+        "⚠ DASHBOARD_TOKEN no está set. Endpoints públicos sin auth. "
+        "Setea DASHBOARD_TOKEN o DASHBOARD_ALLOW_NO_AUTH=true explícitamente."
+    )
+
+# Origins permitidos para WebSocket (anti CSWSH)
+_default_origins = "https://tomas-bot-trading.fly.dev,http://localhost:8000,http://127.0.0.1:8000"
+ALLOWED_ORIGINS = {o.strip() for o in os.getenv("DASHBOARD_ALLOWED_ORIGINS", _default_origins).split(",") if o.strip()}
 
 
 def _check_auth(token: str | None):
-    """Si DASHBOARD_TOKEN está set, requiere coincidencia."""
+    """Valida el token contra DASHBOARD_TOKEN. Si no hay token configurado y
+    DASHBOARD_ALLOW_NO_AUTH=true, deja pasar (solo para dev local)."""
     if not DASHBOARD_TOKEN:
-        return  # auth deshabilitada
+        if ALLOW_NO_AUTH:
+            return
+        raise HTTPException(status_code=503, detail="Auth no configurada — set DASHBOARD_TOKEN")
+    # Soporta tanto "Bearer X" como "X" directo
+    if token and token.lower().startswith("bearer "):
+        token = token[7:].strip()
     if token != DASHBOARD_TOKEN:
         raise HTTPException(status_code=401, detail="Token inválido")
+
+
+def _check_origin(origin: str | None) -> bool:
+    """Valida que el Origin del WebSocket esté en la allowlist."""
+    if not origin:
+        return False
+    return origin in ALLOWED_ORIGINS
 
 
 # ── WebSocket manager ─────────────────────────────────────────────────────────
@@ -151,8 +175,18 @@ async def startup():
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket, token: str | None = None):
-    if DASHBOARD_TOKEN and token != DASHBOARD_TOKEN:
-        await ws.close(code=1008, reason="invalid token")
+    # Validar Origin contra allowlist (anti Cross-Site WebSocket Hijacking)
+    origin = ws.headers.get("origin")
+    if not _check_origin(origin):
+        await ws.close(code=1008, reason="origin not allowed")
+        return
+    # Validar token
+    if DASHBOARD_TOKEN:
+        if token != DASHBOARD_TOKEN:
+            await ws.close(code=1008, reason="invalid token")
+            return
+    elif not ALLOW_NO_AUTH:
+        await ws.close(code=1008, reason="auth not configured")
         return
 
     await manager.connect(ws)
@@ -333,6 +367,7 @@ def get_report():
 
 @app.get("/api/cycles")
 def get_cycles(limit: int = 500):
+    limit = max(1, min(limit, 5000))  # cap anti-DoS
     cycles = analyst.load_cycles()
     return cycles[-limit:]
 
@@ -427,8 +462,16 @@ def export_cycles_csv():
 
 # ── Pause / Resume ────────────────────────────────────────────────────────────
 
+def _check_csrf(content_type: str | None):
+    """Forzar JSON content-type → dispara preflight CORS → bloquea form CSRF."""
+    if not content_type or "application/json" not in content_type.lower():
+        raise HTTPException(status_code=415, detail="Content-Type debe ser application/json")
+
+
 @app.post("/api/pause")
-def pause_bot(authorization: str | None = Header(None)):
+def pause_bot(authorization: str | None = Header(None),
+              content_type: str | None = Header(None)):
+    _check_csrf(content_type)
     _check_auth(authorization)
     PAUSE_FILE.parent.mkdir(parents=True, exist_ok=True)
     PAUSE_FILE.touch()
@@ -437,7 +480,9 @@ def pause_bot(authorization: str | None = Header(None)):
 
 
 @app.post("/api/resume")
-def resume_bot(authorization: str | None = Header(None)):
+def resume_bot(authorization: str | None = Header(None),
+               content_type: str | None = Header(None)):
+    _check_csrf(content_type)
     _check_auth(authorization)
     if PAUSE_FILE.exists():
         PAUSE_FILE.unlink()
@@ -447,11 +492,8 @@ def resume_bot(authorization: str | None = Header(None)):
 
 @app.get("/api/health")
 def health():
-    return {
-        "status": "ok",
-        "paused": PAUSE_FILE.exists(),
-        "auth_enabled": bool(DASHBOARD_TOKEN),
-    }
+    # No revelamos config interna en healthcheck público
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":

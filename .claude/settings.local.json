@@ -28,7 +28,26 @@
       "Bash(fly logs *)",
       "WebSearch",
       "WebFetch(domain:docs.alpaca.markets)",
-      "Bash(fly secrets *)"
+      "Bash(fly secrets *)",
+      "Bash(gh repo *)",
+      "Bash(git rm *)",
+      "Bash(git filter-branch *)",
+      "Bash(git stash *)",
+      "Bash(set FILTER_BRANCH_SQUELCH_WARNING=1)",
+      "Bash(FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch --force --index-filter \"git rm --cached --ignore-unmatch .env\" --prune-empty --tag-name-filter cat -- --all)",
+      "Bash(grep -B1 \"^\\\\.env$\")",
+      "Bash(grep -E \"\\(^COMMIT|^\\\\.env$\\)\")",
+      "Bash(git reflog *)",
+      "Bash(git gc *)",
+      "Bash(grep -c \"^\\\\.env$\")",
+      "Bash(git update-ref *)",
+      "Bash(git check-ignore *)",
+      "Bash(git push *)",
+      "Bash(python -c \"import secrets; print\\(secrets.token_urlsafe\\(48\\)\\)\")",
+      "Bash(curl -s -o /dev/null -w \"Sin token: %{http_code}\\\\n\" -X POST https://tomas-bot-trading.fly.dev/api/pause -H \"Content-Type: application/json\" -d '{}')",
+      "Bash(curl -s -o /dev/null -w \"Con token correcto: %{http_code}\\\\n\" -X POST https://tomas-bot-trading.fly.dev/api/pause -H \"Content-Type: application/json\" -H \"Authorization: Bearer LmnYEr1UyR34cQlpP7HEK_-U4Axe5KesmzUEm5AxXnlou0RW-Sl7yujE3uOkA-NI\" -d '{}')",
+      "Bash(curl -s -o /dev/null -w \"Resume: %{http_code}\\\\n\" -X POST https://tomas-bot-trading.fly.dev/api/resume -H \"Content-Type: application/json\" -H \"Authorization: Bearer LmnYEr1UyR34cQlpP7HEK_-U4Axe5KesmzUEm5AxXnlou0RW-Sl7yujE3uOkA-NI\" -d '{}')",
+      "Bash(git add *)"
     ]
   }
 }

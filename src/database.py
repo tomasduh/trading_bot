@@ -1,4 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+def _utcnow() -> datetime:
+    """Helper: UTC-aware datetime (reemplaza datetime.utcnow() deprecado)."""
+    return datetime.now(timezone.utc)
 from sqlalchemy import (
     create_engine, Column, Integer, Float, String, DateTime, Boolean, Text, event
 )
@@ -52,7 +57,7 @@ class Candle(Base):
     bb_upper = Column(Float)
     bb_mid = Column(Float)
     bb_lower = Column(Float)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
 
 
 class Signal(Base):
@@ -69,7 +74,7 @@ class Signal(Base):
     ema_fast = Column(Float)
     ema_slow = Column(Float)
     acted_on = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
 
 
 class Trade(Base):
@@ -92,7 +97,7 @@ class Trade(Base):
     exit_reason = Column(String)                # "STOP_LOSS" | "TAKE_PROFIT" | "SIGNAL" | "TRAILING_STOP" | "MANUAL"
     order_id = Column(String)
     highest_price = Column(Float)               # para trailing stop: precio máximo alcanzado
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
 
 
 def _migrate_add_columns():

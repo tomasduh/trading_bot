@@ -1,12 +1,14 @@
-ccxt>=4.4.0
-pandas>=2.3.2
-pandas-ta>=0.4.71b0
-numpy>=2.0.0
-python-dotenv>=1.0.0
-SQLAlchemy>=2.0.0
-requests>=2.32.0
-colorlog>=6.0.0
-fastapi
-uvicorn[standard]
-alpaca-py
-scikit-learn>=1.4.0
+# Pin exacto para evitar sorpresas en deploys.
+# Para actualizar: pip install -U <paquete> && pip freeze > requirements.txt
+ccxt==4.4.74
+pandas==2.3.2
+pandas-ta==0.4.71b0
+numpy==2.2.6
+python-dotenv==1.0.1
+SQLAlchemy==2.0.36
+requests==2.32.3
+colorlog==6.9.0
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+alpaca-py==0.43.4
+scikit-learn==1.6.0

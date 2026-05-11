@@ -58,7 +58,11 @@ def _detect_trend(curr) -> tuple[str, float]:
 
 
 def evaluate(df: pd.DataFrame) -> Signal:
-    df = indicators.add_all(df).dropna()
+    # Si los indicadores ya están calculados (caller pasó df_ind), evitamos recálculo.
+    # Detección: presencia de columnas clave creadas por indicators.add_all.
+    if "ema_fast" not in df.columns or "macd_hist" not in df.columns:
+        df = indicators.add_all(df)
+    df = df.dropna()
 
     # Necesitamos al menos EMA_TREND_SLOW + 2 velas para tener todos los indicadores
     min_len = max(4, config.EMA_TREND_SLOW + 2) if config.USE_TREND_FILTER else 4

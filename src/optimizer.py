@@ -177,8 +177,9 @@ def _run_backtest_impl(symbol, timeframe, days, capital, disable_signal_exit=Fal
             if exit_price is None and high >= open_trade.take_profit:
                 exit_price, exit_reason = open_trade.take_profit, "TAKE_PROFIT"
             if exit_price is None and signal.type == "SELL" and not disable_signal_exit:
-                # signal_exit_only_in_loss: solo cerrar si el precio actual < entrada
-                if not signal_exit_only_in_loss or close <= open_trade.entry_price:
+                # signal_exit_only_in_loss: solo cerrar si hay pérdida real (con buffer)
+                loss_threshold = open_trade.entry_price * (1 - config.SIGNAL_EXIT_LOSS_BUFFER_PCT)
+                if not signal_exit_only_in_loss or close < loss_threshold:
                     exit_price, exit_reason = close, "SIGNAL"
 
             if exit_price is not None:
@@ -195,12 +196,14 @@ def _run_backtest_impl(symbol, timeframe, days, capital, disable_signal_exit=Fal
                 equity_curve.append((current_time, equity))
 
         if open_trade is None and signal.type == "BUY":
-            qty = risk_manager.position_size(equity, live_price)
+            qty = risk_manager.position_size(equity, live_price, symbol)
+            if qty <= 0:
+                continue  # min_notional no alcanzado
             open_trade = SimTrade(
                 symbol=symbol, entry_time=current_time, entry_price=live_price,
                 quantity=qty,
-                stop_loss=risk_manager.stop_loss_price(live_price),
-                take_profit=risk_manager.take_profit_price(live_price),
+                stop_loss=risk_manager.stop_loss_price(live_price, symbol),
+                take_profit=risk_manager.take_profit_price(live_price, symbol),
                 highest_price=live_price,
             )
 

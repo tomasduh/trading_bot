@@ -63,7 +63,8 @@ ADX_THRESHOLD = 20     # ADX > 20 indica tendencia con fuerza
 MIN_SIGNAL_SCORE = 2          # mínimo de condiciones para disparar señal
 USE_TREND_FILTER = True       # solo BUY en tendencia alcista, SELL en bajista
 DISABLE_SIGNAL_EXIT = False   # si True: solo cierra por SL/TP/Trailing, no por SELL signal
-SIGNAL_EXIT_ONLY_IN_LOSS = True  # si True: SELL signal solo cierra si el trade está en pérdida
+SIGNAL_EXIT_ONLY_IN_LOSS = True  # si True: SELL signal solo cierra si el trade está en pérdida real
+SIGNAL_EXIT_LOSS_BUFFER_PCT = 0.002  # buffer: SIGNAL cierra solo si precio < entrada * (1-buffer) (0.2%)
 
 # ── Gestión de riesgo ─────────────────────────────────────────────────────────
 RISK_PER_TRADE = 0.01        # 1% del capital por trade (aplicado por símbolo)

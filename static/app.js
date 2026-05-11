@@ -10,7 +10,9 @@ let allTrades       = [];
 let tradeFilter     = "";
 
 const STALE_THRESHOLD_MS = 30_000;  // sin heartbeat 30s → mostrar "stale"
-const DASHBOARD_TOKEN = ""; // si DASHBOARD_TOKEN está set en server, ponlo aquí
+// Token leído de localStorage. Setear desde la consola del browser:
+//   localStorage.setItem('dashboard_token', 'tu-token-aqui')
+const DASHBOARD_TOKEN = (typeof localStorage !== 'undefined' && localStorage.getItem('dashboard_token')) || "";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -376,14 +378,20 @@ function connect() {
 
 // ── Pause / Resume ────────────────────────────────────────────────────────────
 
+function _authHeaders() {
+  const h = { 'Content-Type': 'application/json' };  // requerido por backend (anti-CSRF)
+  if (DASHBOARD_TOKEN) h['Authorization'] = `Bearer ${DASHBOARD_TOKEN}`;
+  return h;
+}
+
 async function pauseBot() {
-  await fetch('/api/pause', { method: 'POST',
-    headers: DASHBOARD_TOKEN ? { Authorization: DASHBOARD_TOKEN } : {} });
+  const r = await fetch('/api/pause', { method: 'POST', headers: _authHeaders(), body: '{}' });
+  if (!r.ok) alert('Error al pausar: ' + r.status);
 }
 
 async function resumeBot() {
-  await fetch('/api/resume', { method: 'POST',
-    headers: DASHBOARD_TOKEN ? { Authorization: DASHBOARD_TOKEN } : {} });
+  const r = await fetch('/api/resume', { method: 'POST', headers: _authHeaders(), body: '{}' });
+  if (!r.ok) alert('Error al reanudar: ' + r.status);
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

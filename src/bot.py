@@ -131,12 +131,12 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
                 alerts.notify_trade_closed(symbol, closed.entry_price, live_price,
                                             closed.pnl_usdt or 0, closed.pnl_pct or 0,
                                             trigger)
-            analyst.log_cycle(live_price, ind_snap, strategy.evaluate(df),
+            analyst.log_cycle(live_price, ind_snap, strategy.evaluate(df_ind),
                               trade_action="CLOSED", symbol=symbol)
             return
 
         # 2. Evaluar señal y actuar
-        signal = strategy.evaluate(df)
+        signal = strategy.evaluate(df_ind)
         signal.price = live_price   # precio vivo, no el de la vela cerrada
         trade_action = None
         acted = False
@@ -162,11 +162,14 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
         elif (signal.type == "SELL"
               and executor.has_open_trade(symbol)
               and not config.DISABLE_SIGNAL_EXIT):
-            # Cambio quirúrgico: solo cerrar por SIGNAL si el trade está en pérdida
+            # Cambio quirúrgico v2: SIGNAL solo cierra si hay pérdida REAL (con buffer)
+            # Evita cortes por tick rojo cuando el trade está esencialmente breakeven
             open_trade = executor.get_open_trade(symbol)
-            in_loss = open_trade is None or live_price <= (open_trade.entry_price or live_price)
+            entry = (open_trade.entry_price if open_trade else live_price) or live_price
+            loss_threshold = entry * (1 - config.SIGNAL_EXIT_LOSS_BUFFER_PCT)
+            in_real_loss = live_price < loss_threshold
             closed = None
-            if not config.SIGNAL_EXIT_ONLY_IN_LOSS or in_loss:
+            if not config.SIGNAL_EXIT_ONLY_IN_LOSS or in_real_loss:
                 closed = executor.close_trade(symbol, live_price, "SIGNAL")
             if closed:
                 trade_action = "CLOSED"
