@@ -28,6 +28,11 @@ def is_paused() -> bool:
 
 
 def persist_candle(symbol: str, df_ind):
+    """Persiste la última vela cerrada. Idempotente: el UNIQUE index
+    (symbol, timestamp) evita duplicados si el ciclo vuelve a correr antes
+    de que cierre la siguiente vela 30m."""
+    from sqlalchemy.exc import IntegrityError
+
     valid = df_ind.dropna()
     if len(valid) < 2:
         return  # warmup todavía
@@ -51,9 +56,14 @@ def persist_candle(symbol: str, df_ind):
         bb_mid=float(last["bb_mid"]),
         bb_lower=float(last["bb_lower"]),
     )
-    with get_session() as session:
-        session.add(candle)
-        session.commit()
+    try:
+        with get_session() as session:
+            session.add(candle)
+            session.commit()
+    except IntegrityError:
+        # Vela ya existe (UNIQUE constraint). Es lo esperado en ciclos repetidos
+        # antes de que cierre una nueva vela 30m. Silenciar sin warning.
+        pass
 
 
 def persist_signal(symbol: str, sig, acted_on: bool):
