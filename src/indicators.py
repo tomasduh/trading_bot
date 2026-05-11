@@ -51,6 +51,12 @@ def add_all(df: pd.DataFrame) -> pd.DataFrame:
     except (KeyError, TypeError):
         df["adx"] = 0.0
 
+    # ── ATR (Average True Range) — para stops dinámicos por volatilidad ───────
+    try:
+        df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=config.ATR_PERIOD)
+    except Exception:
+        df["atr"] = float("nan")
+
     return df
 
 

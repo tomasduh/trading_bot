@@ -86,6 +86,35 @@ def take_profit_price(entry_price: float, symbol: str | None = None) -> float:
     return _round_price(entry_price * (1 + config.TAKE_PROFIT_PCT), symbol)
 
 
+def stop_loss_price_atr(entry_price: float, atr: float,
+                        symbol: str | None = None) -> float:
+    """SL dinámico: entry − ATR_MULTIPLIER_SL × ATR(14).
+
+    Ventaja vs % fijo: en mercados volátiles el SL se ensancha naturalmente
+    y no se activa por ruido normal; en mercados tranquilos se estrecha.
+    El ratio SL:TP se mantiene en 1:2 con take_profit_price_atr.
+    """
+    sl = entry_price - config.ATR_MULTIPLIER_SL * atr
+    return _round_price(max(sl, entry_price * 0.001), symbol)  # mínimo safety
+
+
+def take_profit_price_atr(entry_price: float, atr: float,
+                          symbol: str | None = None) -> float:
+    """TP dinámico: entry + ATR_MULTIPLIER_TP × ATR(14). Ratio 2:1 por defecto."""
+    tp = entry_price + config.ATR_MULTIPLIER_TP * atr
+    return _round_price(tp, symbol)
+
+
+def get_sl_tp(entry_price: float, atr: float = 0.0,
+              symbol: str | None = None) -> tuple[float, float]:
+    """Helper unificado: devuelve (sl, tp) según USE_ATR_STOPS."""
+    if config.USE_ATR_STOPS and atr > 0:
+        return (stop_loss_price_atr(entry_price, atr, symbol),
+                take_profit_price_atr(entry_price, atr, symbol))
+    return (stop_loss_price(entry_price, symbol),
+            take_profit_price(entry_price, symbol))
+
+
 def check_stop_loss(entry_price: float, current_price: float) -> bool:
     return current_price <= stop_loss_price(entry_price)
 

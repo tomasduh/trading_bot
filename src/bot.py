@@ -12,6 +12,7 @@ from src.database import init_db, Candle, Signal as DbSignal, get_session
 from src.executor import TradeExecutor
 from src import indicators, analyst, alerts, reconciler
 from src import alpaca_fetcher
+from src.circuit_breaker import get_breaker
 from src.data_fetcher import DataFetchError, FatalDataFetchError
 
 log_setup.setup("bot")
@@ -200,12 +201,24 @@ def _ping_watchdog():
         logger.warning(f"Watchdog ping falló: {e}")
 
 
-def run_cycle(executor: TradeExecutor):
+def run_cycle(executor: TradeExecutor, initial_capital: float = 10_000.0):
     if is_paused():
         logger.info("⏸  Bot pausado (existe data/.paused) — saltando ciclo.")
         return
 
     logger.info("─" * 55)
+
+    # ── Circuit breaker ───────────────────────────────────────────────────────
+    # Evalúa condiciones de riesgo antes de operar. Si se activa, pausa el bot
+    # tocando PAUSE_FILE (igual que /api/pause) y notifica por alerts.
+    breaker = get_breaker(initial_capital)
+    should_pause, cb_reason = breaker.check()
+    if should_pause:
+        logger.critical(f"🚨 CIRCUIT BREAKER activado: {cb_reason}")
+        alerts.notify_error(f"🚨 Circuit breaker: {cb_reason}\nBot pausado automáticamente.")
+        PAUSE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        PAUSE_FILE.touch()
+        return
 
     # ── Reconciliación: DB vs exchange ────────────────────────────────────────
     # Verifica que los trades "abiertos" en DB coincidan con posiciones reales.
@@ -252,9 +265,17 @@ def main():
     executor = TradeExecutor()
     consecutive_fatal = 0
 
+    # Capital inicial para el circuit breaker (crypto USDT + stocks USD)
+    # Estimamos sumando ambos balances; si falla usamos el default 10K.
+    try:
+        _cb_capital = float(data_fetcher.fetch_balance().get("free", {}).get("USDT", 10_000))
+    except Exception:
+        _cb_capital = 10_000.0
+    logger.info(f"Circuit breaker inicializado con capital base: {_cb_capital:,.2f} USDT")
+
     while True:
         try:
-            run_cycle(executor)
+            run_cycle(executor, initial_capital=_cb_capital)
             consecutive_fatal = 0  # reset al completar un ciclo OK
         except KeyboardInterrupt:
             logger.info("Bot detenido por el usuario.")

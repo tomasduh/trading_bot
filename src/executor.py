@@ -46,8 +46,8 @@ class TradeExecutor:
             return None
 
         qty = risk_manager.position_size(capital_usdt, signal.price, symbol)
-        sl  = risk_manager.stop_loss_price(signal.price, symbol)
-        tp  = risk_manager.take_profit_price(signal.price, symbol)
+        atr = getattr(signal, "atr", 0.0) or 0.0
+        sl, tp = risk_manager.get_sl_tp(signal.price, atr, symbol)
 
         if qty <= 0:
             logger.warning(

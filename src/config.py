@@ -84,6 +84,20 @@ DB_PATH = BASE_DIR / "data" / "trades.db"
 LOG_DIR = BASE_DIR / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
+# ── ATR-based stops (Fase 2.1) ────────────────────────────────────────────────
+# Si USE_ATR_STOPS=True: SL y TP se calculan como múltiplos del ATR en lugar
+# de porcentajes fijos. Más adaptativo: en activos volátiles el SL se ensancha,
+# en activos tranquilos se estrecha. Mantiene ratio 2:1 (TP = 2× SL).
+USE_ATR_STOPS      = False      # activar con backtest comparativo primero
+ATR_PERIOD         = 14         # periodo del Average True Range
+ATR_MULTIPLIER_SL  = 2.0       # SL = entry − ATR_MULT_SL × ATR(14)
+ATR_MULTIPLIER_TP  = 4.0       # TP = entry + ATR_MULT_TP × ATR(14) → ratio 2:1
+
+# ── Circuit breaker (Fase 4.2) ────────────────────────────────────────────────
+CB_DAILY_DRAWDOWN_PCT   = 3.0   # pausa si pierde >3% del capital en el día
+CB_TOTAL_LOSS_PCT       = 10.0  # pausa si pierde >10% del capital inicial
+CB_CONSECUTIVE_LOSSES   = 5     # pausa tras 5 trades perdedores consecutivos
+
 # ── Fees y slippage (realismo en backtest) ────────────────────────────────────
 # Binance spot: 0.1% por lado → 0.2% round-trip.
 # Alpaca paper: sin comisión, pero slippage estimado conservador.

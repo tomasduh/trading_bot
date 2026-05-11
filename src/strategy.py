@@ -36,6 +36,7 @@ class Signal:
     conditions: list = field(default_factory=list)
     trend: str = "neutral"     # "up" | "down" | "neutral"
     adx: float = 0.0
+    atr: float = 0.0           # Average True Range de la última vela cerrada
 
 
 def _detect_trend(curr) -> tuple[str, float]:
@@ -88,6 +89,7 @@ def evaluate(df: pd.DataFrame) -> Signal:
     bb_mid     = float(curr["bb_mid"])
 
     trend, adx = _detect_trend(curr)
+    atr = float(curr["atr"]) if "atr" in curr.index and not pd.isna(curr["atr"]) else 0.0
 
     # ── Condiciones BUY ──────────────────────────────────────────────────────
     buy_conditions = []
@@ -116,7 +118,7 @@ def evaluate(df: pd.DataFrame) -> Signal:
             reason=" | ".join(conds),
             price=price, rsi=rsi, ema_fast=ema_fast, ema_slow=ema_slow,
             macd_hist=macd_hist, score=len(conds),
-            conditions=conds, trend=trend, adx=round(adx, 1),
+            conditions=conds, trend=trend, adx=round(adx, 1), atr=round(atr, 6),
         )
 
     # ── Decisión con filtro de tendencia ─────────────────────────────────────
@@ -125,7 +127,7 @@ def evaluate(df: pd.DataFrame) -> Signal:
             return Signal("NONE",
                 f"BUY bloqueado por filtro de tendencia (trend={trend}, adx={adx:.1f}) | activas: {', '.join(buy_conditions)}",
                 price, rsi, ema_fast, ema_slow, macd_hist, 0,
-                trend=trend, adx=round(adx, 1))
+                trend=trend, adx=round(adx, 1), atr=round(atr, 6))
         return _signal("BUY", buy_conditions)
 
     if len(sell_conditions) >= threshold:
@@ -144,5 +146,5 @@ def evaluate(df: pd.DataFrame) -> Signal:
         type="NONE", reason=reason,
         price=price, rsi=rsi, ema_fast=ema_fast, ema_slow=ema_slow,
         macd_hist=macd_hist, score=0,
-        trend=trend, adx=round(adx, 1),
+        trend=trend, adx=round(adx, 1), atr=round(atr, 6),
     )

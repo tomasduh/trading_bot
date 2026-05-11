@@ -89,17 +89,25 @@ def fetch_history(symbol: str, timeframe: str, days: int) -> pd.DataFrame:
 # ── Loop de backtest ──────────────────────────────────────────────────────────
 
 def run_backtest(symbol: str, timeframe: str = "30m",
-                 days: int = 90, capital: float = 10_000.0) -> dict:
+                 days: int = 90, capital: float = 10_000.0,
+                 df_preloaded: Optional[pd.DataFrame] = None) -> dict:
     """
     Simula la estrategia sobre N días de historia.
     Cada vela cerrada se evalúa como si el bot estuviera ejecutándose en ese momento.
+
+    Si se pasa df_preloaded, no descarga datos (útil para walk-forward).
     """
-    logger.info(f"Descargando {days} días de {symbol} en {timeframe}...")
-    try:
-        df = fetch_history(symbol, timeframe, days)
-    except Exception as e:
-        return {"symbol": symbol, "timeframe": timeframe, "days": days,
-                "error": f"fetch falló: {e}"}
+    if df_preloaded is not None:
+        df = df_preloaded
+        logger.info(f"Usando df pre-cargado: {len(df)} velas | {symbol}")
+    else:
+        logger.info(f"Descargando {days} días de {symbol} en {timeframe}...")
+        try:
+            df = fetch_history(symbol, timeframe, days)
+        except Exception as e:
+            return {"symbol": symbol, "timeframe": timeframe, "days": days,
+                    "error": f"fetch falló: {e}"}
+
     if df.empty or len(df) < 250:
         return {"symbol": symbol, "timeframe": timeframe, "days": days,
                 "error": f"datos insuficientes ({len(df)} velas)"}
@@ -188,13 +196,15 @@ def run_backtest(symbol: str, timeframe: str = "30m",
             qty = risk_manager.position_size(equity, live_price, symbol)
             if qty <= 0:
                 continue
+            atr_val = getattr(signal, "atr", 0.0) or 0.0
+            sl, tp  = risk_manager.get_sl_tp(live_price, atr_val, symbol)
             open_trade = SimTrade(
                 symbol=symbol,
                 entry_time=current_time,
                 entry_price=live_price,
                 quantity=qty,
-                stop_loss=risk_manager.stop_loss_price(live_price, symbol),
-                take_profit=risk_manager.take_profit_price(live_price, symbol),
+                stop_loss=sl,
+                take_profit=tp,
                 highest_price=live_price,
             )
 
@@ -287,6 +297,7 @@ def _summarize(symbol, timeframe, days, capital, final_equity, trades, equity_cu
         "sharpe_ratio":    round(sharpe, 2),
         "avg_duration_min":round(avg_dur, 1),
         "fee_pct_used":    round(fee_pct * 100, 4),   # % por orden (entry + exit)
+        "atr_stops_used":  config.USE_ATR_STOPS,
         "exit_reasons":    exit_reasons,
         "trades_sample":   [
             {**asdict(t),

@@ -80,6 +80,13 @@ VARIANTS: list[dict] = [
      "USE_TRAILING_STOP": False, "USE_TREND_FILTER": True,
      "SIGNAL_EXIT_ONLY_IN_LOSS": True,
      "_description": "SELL signal solo cierra trades en pérdida (deja correr ganadores)"},
+
+    # I. ATR stops: SL/TP dinámicos por volatilidad (2× y 4× ATR14)
+    {"name": "I_atr_stops",
+     "MIN_SIGNAL_SCORE": 2, "USE_TRAILING_STOP": False, "USE_TREND_FILTER": True,
+     "SIGNAL_EXIT_ONLY_IN_LOSS": True, "USE_ATR_STOPS": True,
+     "ATR_MULTIPLIER_SL": 2.0, "ATR_MULTIPLIER_TP": 4.0,
+     "_description": "SL=2×ATR / TP=4×ATR (stops adaptativos por volatilidad)"},
 ]
 
 
@@ -127,17 +134,25 @@ def _patch_disable_signal_exit():
 
 
 def _run_backtest_impl(symbol, timeframe, days, capital, disable_signal_exit=False,
-                       signal_exit_only_in_loss=False):
-    """Versión modificable del run_backtest que respeta disable_signal_exit."""
+                       signal_exit_only_in_loss=False,
+                       df_preloaded=None):
+    """Versión modificable del run_backtest que respeta disable_signal_exit.
+
+    Si df_preloaded no es None, usa ese DataFrame en lugar de descargar datos.
+    Útil para walk-forward (reutilizar la descarga inicial).
+    """
     import pandas as pd
     from src import indicators, strategy, risk_manager
     from src.backtest import fetch_history, SimTrade, _summarize
 
-    try:
-        df = fetch_history(symbol, timeframe, days)
-    except Exception as e:
-        return {"symbol": symbol, "timeframe": timeframe, "days": days,
-                "error": f"fetch falló: {e}"}
+    if df_preloaded is not None:
+        df = df_preloaded
+    else:
+        try:
+            df = fetch_history(symbol, timeframe, days)
+        except Exception as e:
+            return {"symbol": symbol, "timeframe": timeframe, "days": days,
+                    "error": f"fetch falló: {e}"}
     if df.empty or len(df) < 250:
         return {"symbol": symbol, "timeframe": timeframe, "days": days,
                 "error": f"datos insuficientes ({len(df)} velas)"}
@@ -202,11 +217,13 @@ def _run_backtest_impl(symbol, timeframe, days, capital, disable_signal_exit=Fal
             qty = risk_manager.position_size(equity, live_price, symbol)
             if qty <= 0:
                 continue  # min_notional no alcanzado
+            atr_val = getattr(signal, "atr", 0.0) or 0.0
+            sl, tp  = risk_manager.get_sl_tp(live_price, atr_val, symbol)
             open_trade = SimTrade(
                 symbol=symbol, entry_time=current_time, entry_price=live_price,
                 quantity=qty,
-                stop_loss=risk_manager.stop_loss_price(live_price, symbol),
-                take_profit=risk_manager.take_profit_price(live_price, symbol),
+                stop_loss=sl,
+                take_profit=tp,
                 highest_price=live_price,
             )
 
