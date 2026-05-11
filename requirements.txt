@@ -1,0 +1,12 @@
+ccxt>=4.4.0
+pandas>=2.3.2
+pandas-ta>=0.4.71b0
+numpy>=2.0.0
+python-dotenv>=1.0.0
+SQLAlchemy>=2.0.0
+requests>=2.32.0
+colorlog>=6.0.0
+fastapi
+uvicorn[standard]
+alpaca-py
+scikit-learn>=1.4.0

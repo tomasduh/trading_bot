@@ -1,0 +1,17 @@
+[Unit]
+Description=Trading Bot — loop principal
+After=network.target
+
+[Service]
+Type=simple
+User=bottrading
+WorkingDirectory=/home/bottrading/bot
+EnvironmentFile=/home/bottrading/bot/.env
+ExecStart=/home/bottrading/bot/.venv/bin/python -m src.bot
+Restart=on-failure
+RestartSec=30
+StandardOutput=append:/home/bottrading/bot/logs/bot.log
+StandardError=append:/home/bottrading/bot/logs/bot.log
+
+[Install]
+WantedBy=multi-user.target

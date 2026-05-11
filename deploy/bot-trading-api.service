@@ -1,0 +1,17 @@
+[Unit]
+Description=Trading Bot — Dashboard API
+After=network.target
+
+[Service]
+Type=simple
+User=bottrading
+WorkingDirectory=/home/bottrading/bot
+EnvironmentFile=/home/bottrading/bot/.env
+ExecStart=/home/bottrading/bot/.venv/bin/python -m uvicorn src.api:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/bottrading/bot/logs/api.log
+StandardError=append:/home/bottrading/bot/logs/api.log
+
+[Install]
+WantedBy=multi-user.target

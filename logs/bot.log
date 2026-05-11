@@ -1,0 +1,205 @@
+2026-05-08 20:48:04,574 [INFO] ============================================================
+2026-05-08 20:48:04,574 [INFO] Bot iniciando — modo: TESTNET
+2026-05-08 20:48:04,574 [INFO] Par: BTC/USDT | Timeframe: 1h
+2026-05-08 20:48:04,574 [INFO] ============================================================
+2026-05-08 20:48:10,938 [ERROR] Error en ciclo: 'BBU_20_2.0'
+Traceback (most recent call last):
+  File [35m"C:\Users\tomyg\AppData\Roaming\Python\Python313\site-packages\pandas\core\indexes\base.py"[0m, line [35m3641[0m, in [35mget_loc[0m
+    return [31mself._engine.get_loc[0m[1;31m(casted_key)[0m
+           [31m~~~~~~~~~~~~~~~~~~~~[0m[1;31m^^^^^^^^^^^^[0m
+  File [35m"pandas/_libs/index.pyx"[0m, line [35m168[0m, in [35mpandas._libs.index.IndexEngine.get_loc[0m
+  File [35m"pandas/_libs/index.pyx"[0m, line [35m197[0m, in [35mpandas._libs.index.IndexEngine.get_loc[0m
+  File [35m"pandas/_libs/hashtable_class_helper.pxi"[0m, line [35m7668[0m, in [35mpandas._libs.hashtable.PyObjectHashTable.get_item[0m
+  File [35m"pandas/_libs/hashtable_class_helper.pxi"[0m, line [35m7676[0m, in [35mpandas._libs.hashtable.PyObjectHashTable.get_item[0m
+[1;35mKeyError[0m: [35m'BBU_20_2.0'[0m
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File [35m"C:\Users\tomyg\Documents\personal\bot trading\src\bot.py"[0m, line [35m113[0m, in [35mmain[0m
+    [31mrun_cycle[0m[1;31m(executor)[0m
+    [31m~~~~~~~~~[0m[1;31m^^^^^^^^^^[0m
+  File [35m"C:\Users\tomyg\Documents\personal\bot trading\src\bot.py"[0m, line [35m64[0m, in [35mrun_cycle[0m
+    df_ind = indicators.add_all(df)
+  File [35m"C:\Users\tomyg\Documents\personal\bot trading\src\indicators.py"[0m, line [35m30[0m, in [35madd_all[0m
+    df["bb_upper"] = [31mbb[0m[1;31m[f"BBU_{config.BBANDS_PERIOD}_{config.BBANDS_STD}"][0m
+                     [31m~~[0m[1;31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  File [35m"C:\Users\tomyg\AppData\Roaming\Python\Python313\site-packages\pandas\core\frame.py"[0m, line [35m4378[0m, in [35m__getitem__[0m
+    indexer = self.columns.get_loc(key)
+  File [35m"C:\Users\tomyg\AppData\Roaming\Python\Python313\site-packages\pandas\core\indexes\base.py"[0m, line [35m3648[0m, in [35mget_loc[0m
+    raise KeyError(key) from err
+[1;35mKeyError[0m: [35m'BBU_20_2.0'[0m
+2026-05-08 20:48:10,944 [INFO] Esperando 60 min hasta próximo ciclo...
+2026-05-08 20:49:04,368 [INFO] ============================================================
+2026-05-08 20:49:04,368 [INFO] Bot iniciando — modo: TESTNET
+2026-05-08 20:49:04,368 [INFO] Par: BTC/USDT | Timeframe: 1h
+2026-05-08 20:49:04,368 [INFO] ============================================================
+2026-05-08 20:49:07,036 [INFO] BTC/USDT @ 80389.98 USDT
+2026-05-08 20:49:07,047 [INFO] Señal: NONE — no crossover detected
+2026-05-08 20:49:07,051 [INFO] Esperando 60 min hasta próximo ciclo...
+2026-05-08 21:48:11,577 [ERROR] Error en ciclo: 'BBU_20_2.0'
+Traceback (most recent call last):
+  File [35m"C:\Users\tomyg\AppData\Roaming\Python\Python313\site-packages\pandas\core\indexes\base.py"[0m, line [35m3641[0m, in [35mget_loc[0m
+    return [31mself._engine.get_loc[0m[1;31m(casted_key)[0m
+           [31m~~~~~~~~~~~~~~~~~~~~[0m[1;31m^^^^^^^^^^^^[0m
+  File [35m"pandas/_libs/index.pyx"[0m, line [35m168[0m, in [35mpandas._libs.index.IndexEngine.get_loc[0m
+  File [35m"pandas/_libs/index.pyx"[0m, line [35m197[0m, in [35mpandas._libs.index.IndexEngine.get_loc[0m
+  File [35m"pandas/_libs/hashtable_class_helper.pxi"[0m, line [35m7668[0m, in [35mpandas._libs.hashtable.PyObjectHashTable.get_item[0m
+  File [35m"pandas/_libs/hashtable_class_helper.pxi"[0m, line [35m7676[0m, in [35mpandas._libs.hashtable.PyObjectHashTable.get_item[0m
+[1;35mKeyError[0m: [35m'BBU_20_2.0'[0m
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File [35m"C:\Users\tomyg\Documents\personal\bot trading\src\bot.py"[0m, line [35m113[0m, in [35mmain[0m
+    [31mrun_cycle[0m[1;31m(executor)[0m
+    [31m~~~~~~~~~[0m[1;31m^^^^^^^^^^[0m
+  File [35m"C:\Users\tomyg\Documents\personal\bot trading\src\bot.py"[0m, line [35m64[0m, in [35mrun_cycle[0m
+    df_ind = indicators.add_all(df)
+  File [35m"C:\Users\tomyg\Documents\personal\bot trading\src\indicators.py"[0m, line [35m30[0m, in [35madd_all[0m
+    std = config.BBAN[1;31mDS_STD[0m
+                     [1;31m^^^^^^[0m
+  File [35m"C:\Users\tomyg\AppData\Roaming\Python\Python313\site-packages\pandas\core\frame.py"[0m, line [35m4378[0m, in [35m__getitem__[0m
+    indexer = self.columns.get_loc(key)
+  File [35m"C:\Users\tomyg\AppData\Roaming\Python\Python313\site-packages\pandas\core\indexes\base.py"[0m, line [35m3648[0m, in [35mget_loc[0m
+    raise KeyError(key) from err
+[1;35mKeyError[0m: [35m'BBU_20_2.0'[0m
+2026-05-08 21:48:11,583 [INFO] Esperando 60 min hasta próximo ciclo...
+2026-05-08 21:49:07,681 [INFO] BTC/USDT @ 80377.31 USDT
+2026-05-08 21:49:07,695 [INFO] Señal: NONE — no crossover detected
+2026-05-08 21:49:07,698 [INFO] Esperando 60 min hasta próximo ciclo...
+2026-05-08 21:54:15,767 [INFO] ============================================================
+2026-05-08 21:54:15,767 [INFO] Bot iniciando — modo: TESTNET
+2026-05-08 21:54:15,767 [INFO] Par: BTC/USDT | Timeframe: 15m
+2026-05-08 21:54:15,768 [INFO] ============================================================
+2026-05-08 21:54:19,960 [INFO] BTC/USDT @ 80435.53 USDT
+2026-05-08 21:54:19,969 [INFO] Señal: [NONE] score=0/3 | RSI=61.6 MACD_hist=13.5
+2026-05-08 21:54:19,969 [INFO]   → score insuficiente (buy=0, sell=1) | activas: precio cerca BB upper
+2026-05-08 21:54:19,973 [INFO] Esperando 15 min hasta próximo ciclo...
+2026-05-08 21:57:18,567 [INFO] ============================================================
+2026-05-08 21:57:18,567 [INFO] Bot iniciando — modo: TESTNET
+2026-05-08 21:57:18,567 [INFO] Par: BTC/USDT | Timeframe: 15m
+2026-05-08 21:57:18,567 [INFO] ============================================================
+2026-05-08 21:57:21,572 [INFO] BTC/USDT @ 80,420.01 USDT | EMA9=80361 EMA21=80294 RSI=60.9
+2026-05-08 21:57:21,581 [INFO] Señal: [NONE] score=0/3 | MACD_hist=12.5
+2026-05-08 21:57:21,581 [INFO]   → score insuficiente (buy=0, sell=1) | activas: precio cerca BB upper
+2026-05-08 21:57:21,585 [INFO] Esperando 15 min hasta próximo ciclo...
+2026-05-08 22:12:22,116 [INFO] BTC/USDT @ 80,444.65 USDT | EMA9=80376 EMA21=80307 RSI=62.2
+2026-05-08 22:12:22,125 [INFO] Señal: [NONE] score=0/3 | MACD_hist=12.2
+2026-05-08 22:12:22,125 [INFO]   → score insuficiente (buy=0, sell=1) | activas: precio cerca BB upper
+2026-05-08 22:12:22,127 [INFO] Esperando 15 min hasta próximo ciclo...
+2026-05-08 22:16:11,226 [INFO] =======================================================
+2026-05-08 22:16:11,226 [INFO] Bot iniciando — modo: TESTNET
+2026-05-08 22:16:11,227 [INFO] Pares: BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT
+2026-05-08 22:16:11,227 [INFO] Timeframe: 15m
+2026-05-08 22:16:11,227 [INFO] =======================================================
+2026-05-08 22:16:11,233 [INFO] ───────────────────────────────────────────────────────
+2026-05-08 22:16:13,781 [INFO] Balance USDT libre: 10,000.00
+2026-05-08 22:16:14,390 [INFO]   BTC/USDT     @  80,451.30 | RSI=62.7  MACD_hist=+10.6
+2026-05-08 22:16:14,659 [INFO]   ETH/USDT     @   2,318.55 | RSI=61.3  MACD_hist=+0.5
+2026-05-08 22:16:14,665 [INFO]   ETH/USDT     [SELL] score=2/3 → RSI 61 bajando | precio cerca BB upper
+2026-05-08 22:16:14,921 [INFO]   SOL/USDT     @      93.69 | RSI=73.1  MACD_hist=+0.0
+2026-05-08 22:16:15,182 [INFO]   BNB/USDT     @     654.47 | RSI=67.0  MACD_hist=+0.0
+2026-05-08 22:16:15,193 [INFO] Esperando 15 min...
+
+2026-05-08 22:31:15,193 [INFO] ───────────────────────────────────────────────────────
+2026-05-08 22:31:16,097 [INFO] Balance USDT libre: 10,000.00
+2026-05-08 22:31:16,783 [INFO]   BTC/USDT     @  80,400.11 | RSI=58.5  MACD_hist=+5.8
+2026-05-08 22:31:16,790 [INFO]   BTC/USDT     [SELL] score=2/3 → RSI 59 bajando | precio cerca BB upper
+2026-05-08 22:31:17,039 [INFO]   ETH/USDT     @   2,316.41 | RSI=57.2  MACD_hist=+0.2
+2026-05-08 22:31:17,046 [INFO]   ETH/USDT     [SELL] score=2/3 → RSI 57 bajando | precio cerca BB upper
+2026-05-08 22:31:17,297 [INFO]   SOL/USDT     @      93.63 | RSI=71.6  MACD_hist=+0.0
+2026-05-08 22:31:17,303 [INFO]   SOL/USDT     [SELL] score=2/3 → RSI 72 bajando | precio cerca BB upper
+2026-05-08 22:31:17,552 [INFO]   BNB/USDT     @     654.04 | RSI=63.4  MACD_hist=-0.1
+2026-05-08 22:31:17,559 [INFO]   BNB/USDT     [SELL] score=3/3 → MACD cross ↓ | RSI 63 bajando | precio cerca BB upper
+2026-05-08 22:31:17,561 [INFO] Esperando 15 min...
+
+2026-05-08 22:46:17,561 [INFO] ───────────────────────────────────────────────────────
+2026-05-08 22:46:18,058 [INFO] Balance USDT libre: 10,000.00
+2026-05-08 22:46:18,313 [INFO]   BTC/USDT     @  80,347.62 | RSI=54.2  MACD_hist=-2.7
+2026-05-08 22:46:18,573 [INFO]   ETH/USDT     @   2,313.48 | RSI=52.2  MACD_hist=-0.2
+2026-05-08 22:46:18,582 [INFO]   ETH/USDT     [SELL] score=2/3 → MACD cross ↓ | RSI 52 bajando
+2026-05-08 22:46:18,831 [INFO]   SOL/USDT     @      93.54 | RSI=68.8  MACD_hist=+0.0
+2026-05-08 22:46:18,838 [INFO]   SOL/USDT     [SELL] score=2/3 → RSI 69 bajando | precio cerca BB upper
+2026-05-08 22:46:19,084 [INFO]   BNB/USDT     @     653.47 | RSI=59.6  MACD_hist=-0.2
+2026-05-08 22:46:19,093 [INFO] Esperando 15 min...
+
+2026-05-08 22:54:53,928 [INFO] =======================================================
+2026-05-08 22:54:53,928 [INFO] Bot iniciando — modo: TESTNET
+2026-05-08 22:54:53,928 [INFO] Crypto: BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT
+2026-05-08 22:54:53,928 [INFO] Stocks: AAPL, NVDA, TSLA, SPY (solo horario mercado)
+2026-05-08 22:54:53,928 [INFO] Timeframe: 15m
+2026-05-08 22:54:53,928 [INFO] =======================================================
+2026-05-08 22:54:53,934 [INFO] ───────────────────────────────────────────────────────
+2026-05-08 22:54:57,061 [INFO] [CRYPTO] Balance USDT: 10,000.00
+2026-05-08 22:54:57,630 [INFO]   BTC/USDT     @  80,372.85 | RSI=55.9  MACD_hist=-1.1
+2026-05-08 22:54:57,637 [INFO]   BTC/USDT     [SELL] score=2/3 → MACD cross ↓ | precio cerca BB upper
+2026-05-08 22:54:57,885 [INFO]   ETH/USDT     @   2,315.83 | RSI=55.6  MACD_hist=-0.1
+2026-05-08 22:54:57,894 [INFO]   ETH/USDT     [SELL] score=2/3 → MACD cross ↓ | precio cerca BB upper
+2026-05-08 22:54:58,568 [INFO]   SOL/USDT     @      93.67 | RSI=70.6  MACD_hist=+0.0
+2026-05-08 22:54:58,828 [INFO]   BNB/USDT     @     653.83 | RSI=61.4  MACD_hist=-0.2
+2026-05-08 22:54:59,366 [INFO] [STOCKS] Mercado cerrado — esperando apertura (9:30 ET)
+2026-05-08 22:54:59,366 [INFO] Esperando 15 min...
+
+2026-05-08 22:56:28,254 [INFO] =======================================================
+2026-05-08 22:56:28,254 [INFO] Bot iniciando — modo: TESTNET
+2026-05-08 22:56:28,254 [INFO] Crypto: BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT
+2026-05-08 22:56:28,254 [INFO] Stocks: AAPL, NVDA, TSLA, SPY (solo horario mercado)
+2026-05-08 22:56:28,255 [INFO] Timeframe: 15m
+2026-05-08 22:56:28,255 [INFO] =======================================================
+2026-05-08 22:56:28,260 [INFO] ───────────────────────────────────────────────────────
+2026-05-08 22:56:31,369 [INFO] [CRYPTO] Balance USDT: 10,000.00
+2026-05-08 22:56:31,902 [INFO]   BTC/USDT     @  80,394.46 | RSI=57.2  MACD_hist=+0.3
+2026-05-08 22:56:32,156 [INFO]   ETH/USDT     @   2,316.08 | RSI=55.9  MACD_hist=-0.0
+2026-05-08 22:56:32,163 [INFO]   ETH/USDT     [SELL] score=2/3 → MACD cross ↓ | precio cerca BB upper
+2026-05-08 22:56:32,417 [INFO]   SOL/USDT     @      93.68 | RSI=70.7  MACD_hist=+0.0
+2026-05-08 22:56:32,674 [INFO]   BNB/USDT     @     653.91 | RSI=61.7  MACD_hist=-0.2
+2026-05-08 22:56:33,154 [INFO] [STOCKS] Mercado cerrado — esperando apertura (9:30 ET)
+2026-05-08 22:56:33,155 [INFO] Esperando 15 min...
+
+2026-05-08 22:59:26,308 [INFO] =======================================================
+2026-05-08 22:59:26,308 [INFO] Bot iniciando — modo: TESTNET
+2026-05-08 22:59:26,308 [INFO] Crypto: BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT
+2026-05-08 22:59:26,308 [INFO] Stocks: AAPL, NVDA, TSLA, SPY (solo horario mercado)
+2026-05-08 22:59:26,308 [INFO] Timeframe: 15m
+2026-05-08 22:59:26,308 [INFO] =======================================================
+2026-05-08 22:59:26,313 [INFO] ───────────────────────────────────────────────────────
+2026-05-08 22:59:29,466 [INFO] [CRYPTO] Balance USDT: 10,000.00
+2026-05-08 22:59:30,000 [INFO]   BTC/USDT     @  80,395.84 | RSI=57.3  MACD_hist=+0.4
+2026-05-08 22:59:30,263 [INFO]   ETH/USDT     @   2,315.59 | RSI=55.3  MACD_hist=-0.1
+2026-05-08 22:59:30,269 [INFO]   ETH/USDT     [SELL] score=2/3 → MACD cross ↓ | precio cerca BB upper
+2026-05-08 22:59:30,520 [INFO]   SOL/USDT     @      93.67 | RSI=70.6  MACD_hist=+0.0
+2026-05-08 22:59:30,779 [INFO]   BNB/USDT     @     653.70 | RSI=60.8  MACD_hist=-0.2
+2026-05-08 22:59:31,259 [INFO] [STOCKS] Mercado cerrado — esperando apertura (9:30 ET)
+2026-05-08 22:59:31,260 [INFO] Esperando 15 min...
+
+2026-05-08 23:02:33,153 [INFO] =======================================================
+2026-05-08 23:02:33,154 [INFO] Bot iniciando — modo: TESTNET
+2026-05-08 23:02:33,154 [INFO] Crypto: BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT
+2026-05-08 23:02:33,154 [INFO] Stocks: AAPL, NVDA, TSLA, SPY (solo horario mercado)
+2026-05-08 23:02:33,154 [INFO] Timeframe: 15m
+2026-05-08 23:02:33,154 [INFO] =======================================================
+2026-05-08 23:02:33,159 [INFO] ───────────────────────────────────────────────────────
+2026-05-08 23:02:36,336 [INFO] [CRYPTO] Balance USDT: 10,000.00
+2026-05-08 23:02:36,884 [INFO]   BTC/USDT     @  80,415.77 | RSI=58.6  MACD_hist=-0.6
+2026-05-08 23:02:37,146 [INFO]   ETH/USDT     @   2,316.02 | RSI=55.9  MACD_hist=-0.1
+2026-05-08 23:02:37,403 [INFO]   SOL/USDT     @      93.73 | RSI=71.4  MACD_hist=+0.0
+2026-05-08 23:02:37,666 [INFO]   BNB/USDT     @     654.19 | RSI=63.0  MACD_hist=-0.2
+2026-05-08 23:02:38,181 [INFO] [STOCKS] Mercado cerrado — esperando apertura (9:30 ET)
+2026-05-08 23:02:38,181 [INFO] Esperando 15 min...
+
+2026-05-08 23:04:07,941 [INFO] =======================================================
+2026-05-08 23:04:07,942 [INFO] Bot iniciando — modo: TESTNET
+2026-05-08 23:04:07,942 [INFO] Crypto: BTC/USDT, ETH/USDT, SOL/USDT, BNB/USDT
+2026-05-08 23:04:07,942 [INFO] Stocks: AAPL, NVDA, TSLA, SPY (solo horario mercado)
+2026-05-08 23:04:07,942 [INFO] Timeframe: 30m
+2026-05-08 23:04:07,942 [INFO] =======================================================
+2026-05-08 23:04:07,946 [INFO] ───────────────────────────────────────────────────────
+2026-05-08 23:04:10,607 [INFO] [CRYPTO] Balance USDT: 10,000.00
+2026-05-08 23:04:11,175 [INFO]   BTC/USDT     @  80,438.57 | RSI=59.4  MACD_hist=+11.2
+2026-05-08 23:04:11,434 [INFO]   ETH/USDT     @   2,317.71 | RSI=63.6  MACD_hist=-0.1
+2026-05-08 23:04:11,689 [INFO]   SOL/USDT     @      93.77 | RSI=77.3  MACD_hist=+0.0
+2026-05-08 23:04:11,946 [INFO]   BNB/USDT     @     654.59 | RSI=68.7  MACD_hist=+0.1
+2026-05-08 23:04:12,455 [INFO] [STOCKS] Mercado cerrado — esperando apertura (9:30 ET)
+2026-05-08 23:04:12,456 [INFO] Esperando 30 min...
+

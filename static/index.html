@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trading Bot Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: { colors: { brand: {
+        50:'#eff6ff',100:'#dbeafe',200:'#bfdbfe',
+        400:'#60a5fa',500:'#3b82f6',600:'#2563eb',
+        700:'#1d4ed8',800:'#1e40af',900:'#1e3a8a',
+      }}}}
+    }
+  </script>
+  <style>
+    body { background: #0f172a; }
+    .card { background: #1e293b; border: 1px solid #334155; }
+    .glow { box-shadow: 0 0 20px rgba(59,130,246,0.15); }
+    .badge-buy    { background:#064e3b; color:#34d399; }
+    .badge-sell   { background:#7f1d1d; color:#f87171; }
+    .badge-none   { background:#1e293b; color:#94a3b8; }
+    .badge-open   { background:#1e3a8a; color:#93c5fd; }
+    .badge-closed { background:#1e293b; color:#64748b; }
+    .badge-paused { background:#7c2d12; color:#fbbf24; }
+    .pnl-pos { color: #34d399; }
+    .pnl-neg { color: #f87171; }
+    ::-webkit-scrollbar { width:4px; height:4px; }
+    ::-webkit-scrollbar-track { background:#0f172a; }
+    ::-webkit-scrollbar-thumb { background:#334155; border-radius:2px; }
+    .log-line { font-family: monospace; font-size: 11px; color: #64748b; }
+    .log-line.info  { color: #60a5fa; }
+    .log-line.error { color: #f87171; }
+    .log-line.warn  { color: #fbbf24; }
+    .pulse { animation: pulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+    .stale-banner {
+      background: linear-gradient(90deg, #7c2d12, #b45309);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    .btn { transition: all 0.15s; cursor: pointer; }
+    .btn:hover { transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+  </style>
+</head>
+<body class="text-slate-200 min-h-screen">
+
+  <!-- Stale banner (oculto por defecto) -->
+  <div id="stale-banner" class="stale-banner text-white text-center py-2 text-sm font-semibold hidden">
+    ⚠ Sin actualizaciones recientes — los datos pueden estar desactualizados
+  </div>
+
+  <!-- Header -->
+  <header class="border-b border-slate-700 px-6 py-4 flex items-center justify-between flex-wrap gap-3">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-lg bg-brand-600 flex items-center justify-center text-white font-bold text-sm">B</div>
+      <div>
+        <h1 class="text-white font-semibold text-lg leading-none">Trading Bot</h1>
+        <p class="text-slate-400 text-xs mt-0.5">Paper Trading Dashboard</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-3 flex-wrap">
+      <div class="flex items-center gap-1.5">
+        <span id="conn-dot" class="w-2 h-2 rounded-full bg-red-400"></span>
+        <span id="conn-label" class="text-red-400 text-xs">Conectando...</span>
+      </div>
+      <span class="text-slate-500 text-xs" id="last-update"></span>
+      <div class="flex items-center gap-1.5 bg-slate-800 px-2.5 py-1 rounded-lg border border-slate-700">
+        <svg class="w-3 h-3 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        <span class="text-brand-400 text-xs font-mono font-semibold" id="countdown">--:--</span>
+      </div>
+      <span id="pause-badge" class="hidden badge-paused px-2 py-0.5 rounded text-xs font-semibold">⏸ PAUSADO</span>
+
+      <!-- Controles -->
+      <button id="btn-pause" class="btn bg-amber-600 hover:bg-amber-700 text-white text-xs px-3 py-1.5 rounded-lg font-semibold">
+        ⏸ Pausar
+      </button>
+      <button id="btn-resume" class="btn bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-3 py-1.5 rounded-lg font-semibold hidden">
+        ▶ Reanudar
+      </button>
+      <a href="/api/export/trades.csv" class="btn bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs px-3 py-1.5 rounded-lg font-semibold">
+        📥 CSV
+      </a>
+      <span class="text-xs text-slate-500" id="timeframe-badge"></span>
+    </div>
+  </header>
+
+  <!-- Stats Row -->
+  <div class="grid grid-cols-2 md:grid-cols-5 gap-4 px-6 pt-6">
+    <div class="card rounded-xl p-4 glow">
+      <p class="text-slate-400 text-xs uppercase tracking-wide">PnL Total</p>
+      <p class="text-2xl font-bold mt-1" id="total-pnl">—</p>
+    </div>
+    <div class="card rounded-xl p-4">
+      <p class="text-slate-400 text-xs uppercase tracking-wide">Win Rate</p>
+      <p class="text-2xl font-bold mt-1 text-brand-400" id="win-rate">—</p>
+    </div>
+    <div class="card rounded-xl p-4">
+      <p class="text-slate-400 text-xs uppercase tracking-wide">Trades</p>
+      <p class="text-2xl font-bold mt-1 text-white" id="total-trades">—</p>
+    </div>
+    <div class="card rounded-xl p-4">
+      <p class="text-slate-400 text-xs uppercase tracking-wide">Wins / Losses</p>
+      <p class="text-2xl font-bold mt-1" id="wins-losses">—</p>
+    </div>
+    <div class="card rounded-xl p-4">
+      <p class="text-slate-400 text-xs uppercase tracking-wide">Ciclos</p>
+      <p class="text-2xl font-bold mt-1 text-white" id="total-cycles">—</p>
+    </div>
+  </div>
+
+  <!-- Main Grid -->
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 px-6 pt-4">
+    <!-- Señales -->
+    <div class="lg:col-span-2 card rounded-xl p-5">
+      <h2 class="text-white font-semibold mb-4 flex items-center gap-2">
+        <span class="w-1 h-4 bg-brand-500 rounded-full"></span>
+        Señales actuales
+      </h2>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-slate-500 text-xs uppercase border-b border-slate-700">
+              <th class="text-left pb-2">Símbolo</th>
+              <th class="text-right pb-2">Precio</th>
+              <th class="text-right pb-2">RSI</th>
+              <th class="text-right pb-2">MACD</th>
+              <th class="text-right pb-2">EMA 9/21</th>
+              <th class="text-center pb-2">Señal</th>
+            </tr>
+          </thead>
+          <tbody id="signals-table" class="divide-y divide-slate-800"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Posiciones abiertas -->
+    <div class="card rounded-xl p-5">
+      <h2 class="text-white font-semibold mb-4 flex items-center gap-2">
+        <span class="w-1 h-4 bg-emerald-500 rounded-full"></span>
+        Posiciones abiertas
+        <span class="text-xs text-slate-500 font-normal">(MTM en vivo)</span>
+      </h2>
+      <div id="open-positions" class="space-y-3 text-sm text-slate-400">
+        <p class="text-center py-4">Sin posiciones abiertas</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Performance por símbolo -->
+  <div class="px-6 pt-4">
+    <div class="card rounded-xl p-5">
+      <h2 class="text-white font-semibold mb-4 flex items-center gap-2">
+        <span class="w-1 h-4 bg-cyan-500 rounded-full"></span>
+        Performance por símbolo
+      </h2>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-slate-500 text-xs uppercase border-b border-slate-700">
+              <th class="text-left pb-2">Símbolo</th>
+              <th class="text-right pb-2">Trades</th>
+              <th class="text-right pb-2">W / L</th>
+              <th class="text-right pb-2">Win rate</th>
+              <th class="text-right pb-2">PnL USDT</th>
+              <th class="text-right pb-2">PnL % medio</th>
+            </tr>
+          </thead>
+          <tbody id="per-symbol-table" class="divide-y divide-slate-800"></tbody>
+        </table>
+        <p id="no-per-symbol" class="text-center text-slate-500 py-6">Sin trades cerrados aún</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 px-6 pt-4">
+    <div class="card rounded-xl p-5">
+      <h2 class="text-white font-semibold mb-4 flex items-center gap-2">
+        <span class="w-1 h-4 bg-brand-500 rounded-full"></span>
+        Evolución PnL
+      </h2>
+      <canvas id="pnl-chart" height="180"></canvas>
+    </div>
+    <div class="card rounded-xl p-5">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-white font-semibold flex items-center gap-2">
+          <span class="w-1 h-4 bg-purple-500 rounded-full"></span>
+          Precio + BB
+        </h2>
+        <select id="chart-symbol" class="bg-slate-700 text-slate-200 text-xs rounded px-2 py-1 border border-slate-600">
+          <option value="BTC/USDT">BTC/USDT</option>
+          <option value="ETH/USDT">ETH/USDT</option>
+          <option value="SOL/USDT">SOL/USDT</option>
+          <option value="BNB/USDT">BNB/USDT</option>
+          <option value="AAPL">AAPL</option>
+          <option value="NVDA">NVDA</option>
+          <option value="TSLA">TSLA</option>
+          <option value="SPY">SPY</option>
+        </select>
+      </div>
+      <canvas id="price-chart" height="180"></canvas>
+    </div>
+  </div>
+
+  <!-- Trades + búsqueda -->
+  <div class="px-6 pt-4">
+    <div class="card rounded-xl p-5">
+      <div class="flex items-center justify-between mb-4 gap-3 flex-wrap">
+        <h2 class="text-white font-semibold flex items-center gap-2">
+          <span class="w-1 h-4 bg-amber-500 rounded-full"></span>
+          Historial de trades
+        </h2>
+        <input id="trade-filter" type="text" placeholder="Filtrar por símbolo o razón..."
+               class="bg-slate-700 text-slate-200 text-xs rounded px-3 py-1.5 border border-slate-600 w-64">
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-slate-500 text-xs uppercase border-b border-slate-700">
+              <th class="text-left pb-2">#</th>
+              <th class="text-left pb-2">Símbolo</th>
+              <th class="text-right pb-2">Entrada</th>
+              <th class="text-right pb-2">Salida</th>
+              <th class="text-right pb-2">Qty</th>
+              <th class="text-right pb-2">PnL USDT</th>
+              <th class="text-right pb-2">PnL %</th>
+              <th class="text-center pb-2">Estado</th>
+              <th class="text-center pb-2">Razón salida</th>
+            </tr>
+          </thead>
+          <tbody id="trades-table" class="divide-y divide-slate-800 text-slate-300"></tbody>
+        </table>
+        <p id="no-trades" class="text-center text-slate-500 py-8">Sin trades aún — el bot está buscando señales</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div class="px-6 pt-4 pb-6">
+    <div class="card rounded-xl p-5">
+      <h2 class="text-white font-semibold mb-3 flex items-center gap-2">
+        <span class="w-1 h-4 bg-slate-500 rounded-full"></span>
+        Log en vivo
+        <span class="text-xs text-slate-500 font-normal ml-1">(últimas 200 líneas)</span>
+      </h2>
+      <div id="log-container" class="space-y-0.5 max-h-64 overflow-y-auto"></div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

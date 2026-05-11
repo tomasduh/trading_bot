@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip list *)",
+      "Bash(pip install *)",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import ccxt; import inspect; src = inspect.getfile\\(ccxt.binance\\); print\\(src\\)\")",
+      "Bash(python -m src.bot)",
+      "Bash(echo \"PID: $!\")",
+      "Bash(taskkill /F /IM python.exe)",
+      "PowerShell(Get-Process python -ErrorAction SilentlyContinue)",
+      "PowerShell(Stop-Process -Force)",
+      "Bash(python3 -c ' *)",
+      "Bash(pip show *)",
+      "Bash(python -m uvicorn src.api:app --host 0.0.0.0 --port 8000)",
+      "Bash(curl -s http://localhost:8000/api/status)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('API OK -', d['total_cycles'], 'ciclos,', d['total_trades'], 'trades'\\)\")",
+      "Bash(fly version *)",
+      "Bash(fly apps *)",
+      "Bash(fly volumes *)",
+      "Bash(fly platform *)",
+      "Bash(fly deploy *)",
+      "Bash(xargs grep *)",
+      "Bash(tasklist)",
+      "Bash(python -m pytest tests/ -v --tb=short)",
+      "Bash(python -m pip install pytest -q)",
+      "Bash(python -m pytest tests/ -q --tb=short)",
+      "Bash(fly logs *)",
+      "WebSearch",
+      "WebFetch(domain:docs.alpaca.markets)",
+      "Bash(fly secrets *)"
+    ]
+  }
+}
