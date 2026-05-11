@@ -131,4 +131,7 @@ SLIPPAGE_PCT = 0.0005    # 0.05% estimado conservador por orden (ambos lados)
 HC_PING_URL = os.getenv("HC_PING_URL", "")
 
 # ── Loop ───────────────────────────────────────────────────────────────────────
-LOOP_INTERVAL_SECONDS = 60 * 30  # cada 30 minutos (igual que el timeframe)
+# Bajamos a 10min para que SL/TP, circuit breaker y reconciliador reaccionen
+# 3× más rápido que el timeframe de 30m. Las señales siguen evaluándose sobre
+# velas cerradas de 30m (no cambia la estrategia validada).
+LOOP_INTERVAL_SECONDS = 60 * 10  # cada 10 minutos
