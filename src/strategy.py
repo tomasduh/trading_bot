@@ -39,6 +39,13 @@ class Signal:
     atr: float = 0.0           # Average True Range de la última vela cerrada
 
 
+def _none_signal(price, rsi, ema_fast, ema_slow, macd_hist, reason,
+                 trend="neutral", adx=0.0, atr=0.0) -> "Signal":
+    """Helper para crear señales NONE con todos los campos."""
+    return Signal("NONE", reason, price, rsi, ema_fast, ema_slow,
+                  macd_hist, 0, trend=trend, adx=round(adx, 1), atr=round(atr, 6))
+
+
 def _detect_trend(curr) -> tuple[str, float]:
     """Devuelve ('up'|'down'|'neutral', adx_value)."""
     ema_t_fast = float(curr.get("ema_trend_fast", 0) or 0)
@@ -56,6 +63,48 @@ def _detect_trend(curr) -> tuple[str, float]:
     if ema_t_fast < ema_t_slow:
         return "down", adx
     return "neutral", adx
+
+
+def evaluate_mtf(df_30m: pd.DataFrame, df_4h: pd.DataFrame) -> Signal:
+    """
+    Multi-timeframe: usa el 4h para confirmar tendencia macro antes de abrir BUY.
+
+    Lógica:
+      - Calcula indicadores en 4h si aún no están.
+      - Detecta la tendencia macro (EMA21/50 + ADX) en 4h.
+      - Si la tendencia macro es BAJISTA → bloquea BUY (espera recuperación).
+      - Si es ALCISTA o NEUTRAL → evalúa señal 30m normalmente.
+      - SELL no se bloquea (siempre se permite cerrar posiciones).
+
+    Por qué ayuda:
+      El 30m tiene mucho ruido. El 4h filtra las entradas contra la tendencia
+      macro, reduciendo falsas señales de compra en mercados bajistas.
+    """
+    # ── Tendencia macro en 4h ─────────────────────────────────────────────────
+    if "ema_trend_fast" not in df_4h.columns or df_4h["ema_trend_fast"].isna().all():
+        df_4h = indicators.add_all(df_4h)
+    df_4h_clean = df_4h.dropna()
+
+    macro_trend, macro_adx = "neutral", 0.0
+    if len(df_4h_clean) >= 2:
+        # En 4h usamos iloc[-1] (la última vela cerrada disponible)
+        macro_curr  = df_4h_clean.iloc[-1]
+        macro_trend, macro_adx = _detect_trend(macro_curr)
+
+    # ── Señal 30m normal ──────────────────────────────────────────────────────
+    signal = evaluate(df_30m)
+
+    # ── Filtro macro: BUY bloqueado si 4h es bajista ─────────────────────────
+    if signal.type == "BUY" and macro_trend == "down":
+        reason = (f"BUY bloqueado — tendencia macro 4h BAJISTA "
+                  f"(adx={macro_adx:.1f}) | señal 30m: {signal.reason}")
+        return _none_signal(
+            signal.price, signal.rsi, signal.ema_fast, signal.ema_slow,
+            signal.macd_hist, reason,
+            trend=macro_trend, adx=macro_adx, atr=signal.atr,
+        )
+
+    return signal
 
 
 def evaluate(df: pd.DataFrame) -> Signal:

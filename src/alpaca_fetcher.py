@@ -30,17 +30,23 @@ _TF_MAP = {
     "1m":  TimeFrame(1,  TimeFrameUnit.Minute),
     "5m":  TimeFrame(5,  TimeFrameUnit.Minute),
     "15m": TimeFrame(15, TimeFrameUnit.Minute),
+    "30m": TimeFrame(30, TimeFrameUnit.Minute),
     "1h":  TimeFrame(1,  TimeFrameUnit.Hour),
+    "4h":  TimeFrame(4,  TimeFrameUnit.Hour),   # para multi-timeframe macro
     "1d":  TimeFrame(1,  TimeFrameUnit.Day),
 }
 
 
 def fetch_ohlcv(symbol: str, timeframe: str = "15m", limit: int = 200) -> pd.DataFrame:
     tf = _TF_MAP.get(timeframe, TimeFrame(15, TimeFrameUnit.Minute))
-    # Alpaca no acepta 'limit', usa ventana de tiempo — pedimos suficiente historia
-    end   = datetime.now(timezone.utc)
-    # Para 15m, 200 velas ≈ 50 horas ≈ ~7 días de mercado
-    start = end - timedelta(days=14)
+    # Alpaca no acepta 'limit', usa ventana de tiempo — calculamos rango necesario
+    end = datetime.now(timezone.utc)
+    # Ventana de tiempo según timeframe para cubrir `limit` velas de mercado
+    tf_hours = {"1m": 1/60, "5m": 5/60, "15m": 0.25, "30m": 0.5,
+                "1h": 1, "4h": 4, "1d": 24}.get(timeframe, 0.25)
+    # Mercado abierto ~6.5h/día × 5 días = 32.5h/semana; multiplicamos por 3 para holgura
+    market_days_needed = max(14, int(limit * tf_hours / 6.5 * 3))
+    start = end - timedelta(days=market_days_needed)
 
     req = StockBarsRequest(
         symbol_or_symbols=symbol,

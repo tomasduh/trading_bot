@@ -6,7 +6,7 @@ Pasos a seguir, ordenados por prioridad y dificultad. Cada paso incluye **qué h
 
 ## 📍 Estado actual (snapshot)
 
-> **Última actualización:** 2026-05-11 — Sprints Semana 1 y Semana 2 completados.
+> **Última actualización:** 2026-05-11 — Sprints Semana 1, 2 y 3 completados.
 
 | | |
 |---|---|
@@ -24,6 +24,9 @@ Pasos a seguir, ordenados por prioridad y dificultad. Cada paso incluye **qué h
 | Reconciliador | ✅ DB vs exchange al inicio de cada ciclo |
 | Watchdog externo | ✅ healthchecks.io via `HC_PING_URL` env var |
 | Rate limiting | ✅ slowapi 60-200/min por endpoint |
+| Multi-timeframe | ✅ `USE_MTF=True` activa confirmación 4h (desactivado por defecto) |
+| Feature logging ML | ✅ `data/features.jsonl` — entry + outcome por trade_id |
+| Cap exposición | ✅ `MAX_TOTAL_EXPOSURE_PCT=5%` bloquea nuevas entradas si se excede |
 | Auth dashboard | Token obligatorio + Origin check + CSRF protection |
 | Tests | 28/28 ✅ |
 
@@ -31,6 +34,7 @@ Pasos a seguir, ordenados por prioridad y dificultad. Cada paso incluye **qué h
 
 | Commit | Descripción |
 |---|---|
+| `(semana 3)` | feat: Sprint Semana 3 — feature logging ML, multi-timeframe 4h, cap exposición |
 | `7bba1b3` | feat: Sprint Semana 2 — walk-forward, ATR stops, circuit breaker |
 | `5a12e7a` | feat: Sprint Semana 1 — fees en backtest, reconciliador, watchdog, quick wins |
 | `393f2aa` | docs: ROADMAP.md inicial |
@@ -129,7 +133,7 @@ ATR_MULTIPLIER_TP = 4.0  # ratio 2:1 mantenido
 
 ---
 
-### ⏳ 2.2 Multi-timeframe (4h confirmación, 30m entrada)
+### ✅ 2.2 Multi-timeframe (4h confirmación, 30m entrada) — **COMPLETADO** (Semana 3)
 
 **Qué:** Usar timeframe 4h para detectar tendencia macro, 30m para timing de entrada.
 
@@ -179,7 +183,7 @@ def detect_regime(df):
 
 > **Pre-requisito:** tener acumulados **≥ 200 trades cerrados** para entrenar con confianza. Actualmente tenemos 48h+ de cycles loggeados — empezar a recolectar features ya.
 
-### ⏳ 3.1 Loguear feature vectors completos
+### ✅ 3.1 Loguear feature vectors completos — **COMPLETADO** (Semana 3)
 
 **Qué:** Cada vez que el bot evalúa, guardar **todas las features** que generó (no solo el resultado).
 
@@ -313,7 +317,7 @@ if should_pause:
 
 ---
 
-### ⏳ 4.3 Cap global de exposición
+### ✅ 4.3 Cap global de exposición — **COMPLETADO** (Semana 3)
 
 **Qué:** Hoy `MAX_OPEN_TRADES=1` es por símbolo. Si los 4 cryptos dan BUY simultáneamente, abrimos 4 trades = 4% de exposición sin tracking agregado.
 
@@ -457,10 +461,16 @@ fly secrets set BINANCE_API_KEY=... BINANCE_SECRET=... --app tomas-bot-trading
 - ✅ Fase 2.1: ATR-based stops
 - ✅ Fase 4.2: Circuit breaker
 
-### ⏳ Semana 3 — PRÓXIMA
-- Fase 2.2: Multi-timeframe (4h confirmación, 30m entrada)
-- Fase 3.1: Logging features completas → `data/features.jsonl`
-- Fase 4.3: Cap exposición global
+### ✅ Semana 3 — COMPLETADA
+- ✅ Fase 2.2: Multi-timeframe (4h confirmación, 30m entrada) — `USE_MTF=True` para activar
+- ✅ Fase 3.1: Feature logging completo → `data/features.jsonl` (entry + outcome por trade_id)
+- ✅ Fase 4.3: Cap exposición global → `MAX_TOTAL_EXPOSURE_PCT=5%`
+- ✅ API endpoint `/api/features/summary` — progreso hacia los 200 trades para ML
+
+### ⏳ Semana 4 — PRÓXIMA
+- Fase 2.3: Régimen de mercado (trending / ranging / choppy)
+- Fase 3.2: ML meta-classifier con LightGBM (requiere ≥200 trades en features.jsonl)
+- Quick wins restantes: audit log, test_executor, test_alpaca
 
 ### Semana 4
 - Fase 2.3: Régimen de mercado (trending / ranging / choppy)
@@ -514,4 +524,4 @@ fly secrets set BINANCE_API_KEY=... BINANCE_SECRET=... --app tomas-bot-trading
 
 _Documento vivo — se actualiza automáticamente al finalizar cada sprint._
 
-**Progreso global:** 8/18 tareas completadas (Fases 1 ✅, 2.1 ✅, 4.1 ✅, 4.2 ✅, 4.4 ✅ + 5 quick wins ✅)
+**Progreso global:** 12/18 tareas completadas (Fases 1 ✅, 2.1 ✅, 2.2 ✅, 3.1 ✅, 4.1 ✅, 4.2 ✅, 4.3 ✅, 4.4 ✅ + 5 quick wins ✅)

@@ -15,8 +15,9 @@ from pathlib import Path
 from src.config import BASE_DIR
 from src.database import get_session, Trade, Signal as DbSignal
 
-CYCLES_LOG = BASE_DIR / "data" / "cycles.jsonl"
-REPORT_PATH = BASE_DIR / "data" / "strategy_report.json"
+CYCLES_LOG   = BASE_DIR / "data" / "cycles.jsonl"
+FEATURES_LOG = BASE_DIR / "data" / "features.jsonl"   # para entrenamiento ML
+REPORT_PATH  = BASE_DIR / "data" / "strategy_report.json"
 
 
 # ── Escritura de ciclos ───────────────────────────────────────────────────────
@@ -43,6 +44,119 @@ def log_cycle(price: float, indicators: dict, signal,
     }
     with open(CYCLES_LOG, "a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
+
+
+# ── Feature logging para ML ──────────────────────────────────────────────────
+
+def log_features(symbol: str, trade_id: int, price: float, features: dict,
+                 signal_type: str = "BUY"):
+    """
+    Registra el vector de features en el momento de apertura de un trade.
+
+    Formato JSONL — cada línea es un evento:
+      event=entry  → features en el momento del BUY (label aún desconocido)
+      event=exit   → outcome del trade (se puede hacer JOIN por trade_id)
+
+    El script de entrenamiento (src/train_ml.py) une ambos eventos por trade_id
+    para construir el dataset (X=features, y=was_winner).
+    """
+    record = {
+        "ts":          datetime.now(timezone.utc).isoformat(),
+        "event":       "entry",
+        "symbol":      symbol,
+        "trade_id":    trade_id,
+        "signal_type": signal_type,
+        "price":       round(price, 6),
+        "features":    {k: (round(float(v), 6) if v is not None else None)
+                        for k, v in features.items()},
+    }
+    with open(FEATURES_LOG, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def log_outcome(trade_id: int, symbol: str, exit_reason: str,
+                pnl_pct: float, pnl_usdt: float):
+    """
+    Registra el resultado del trade para poder etiquetar el vector de features.
+    Llamar cuando se cierra un trade en bot.py.
+    """
+    record = {
+        "ts":          datetime.now(timezone.utc).isoformat(),
+        "event":       "exit",
+        "symbol":      symbol,
+        "trade_id":    trade_id,
+        "exit_reason": exit_reason,
+        "pnl_pct":     round(pnl_pct, 6),
+        "pnl_usdt":    round(pnl_usdt, 4),
+        "was_winner":  pnl_usdt > 0,
+    }
+    with open(FEATURES_LOG, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def load_features() -> list[dict]:
+    """Carga todos los eventos del features log."""
+    if not FEATURES_LOG.exists():
+        return []
+    records = []
+    with open(FEATURES_LOG, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+    return records
+
+
+def load_feature_dataset() -> list[dict]:
+    """
+    Construye el dataset de entrenamiento uniendo events entry+exit por trade_id.
+
+    Retorna lista de {features, was_winner, exit_reason, symbol, trade_id}.
+    Solo incluye trades con ambos eventos registrados (entry + exit).
+    """
+    records = load_features()
+    entries  = {r["trade_id"]: r for r in records if r["event"] == "entry"}
+    outcomes = {r["trade_id"]: r for r in records if r["event"] == "exit"}
+
+    dataset = []
+    for tid, entry in entries.items():
+        if tid not in outcomes:
+            continue   # trade aún abierto
+        outcome = outcomes[tid]
+        dataset.append({
+            "trade_id":    tid,
+            "symbol":      entry["symbol"],
+            "ts_entry":    entry["ts"],
+            "ts_exit":     outcome["ts"],
+            "features":    entry["features"],
+            "was_winner":  outcome["was_winner"],
+            "pnl_pct":     outcome["pnl_pct"],
+            "exit_reason": outcome["exit_reason"],
+        })
+    return dataset
+
+
+def features_summary() -> dict:
+    """Resumen del estado del feature log para el dashboard."""
+    dataset = load_feature_dataset()
+    all_records = load_features()
+    entries_count  = sum(1 for r in all_records if r["event"] == "entry")
+    outcomes_count = sum(1 for r in all_records if r["event"] == "exit")
+    labeled_count  = len(dataset)
+    winners        = sum(1 for d in dataset if d["was_winner"])
+    return {
+        "total_entries":  entries_count,
+        "total_outcomes": outcomes_count,
+        "labeled_trades": labeled_count,
+        "winners":        winners,
+        "losers":         labeled_count - winners,
+        "win_rate_pct":   round(winners / labeled_count * 100, 1) if labeled_count else 0,
+        "ready_for_ml":   labeled_count >= 200,
+        "needed_for_ml":  max(0, 200 - labeled_count),
+    }
 
 
 # ── Análisis ──────────────────────────────────────────────────────────────────

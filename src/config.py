@@ -84,6 +84,20 @@ DB_PATH = BASE_DIR / "data" / "trades.db"
 LOG_DIR = BASE_DIR / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
+# ── Multi-timeframe (Fase 2.2) ────────────────────────────────────────────────
+# USE_MTF=True: añade confirmación de tendencia macro en 4h antes de abrir BUY.
+# Si el 4h está en tendencia bajista → BUY bloqueado aunque el 30m diga BUY.
+# Activar solo después de comparar con backtest (el filtro reduce trades pero
+# mejora calidad si el mercado tiene tendencias claras en 4h).
+USE_MTF         = False        # activar después de backtest comparativo
+MTF_TIMEFRAME   = "4h"        # timeframe macro para confirmación de tendencia
+
+# ── Cap global de exposición (Fase 4.3) ───────────────────────────────────────
+# Limita el riesgo total en vuelo (suma de todos los (entry - SL) × qty activos).
+# Con 4 cryptos × 1% de riesgo cada uno la exposición máxima es 4%.
+# MAX_TOTAL_EXPOSURE_PCT=0.05 da un margen antes de bloquear nuevas entradas.
+MAX_TOTAL_EXPOSURE_PCT = 0.05  # 5% máximo del capital en riesgo simultáneo
+
 # ── ATR-based stops (Fase 2.1) ────────────────────────────────────────────────
 # Si USE_ATR_STOPS=True: SL y TP se calculan como múltiplos del ATR en lugar
 # de porcentajes fijos. Más adaptativo: en activos volátiles el SL se ensancha,

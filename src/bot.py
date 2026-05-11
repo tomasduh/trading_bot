@@ -79,18 +79,82 @@ def _indicator_snapshot(df_ind) -> dict | None:
         return None
     last = valid.iloc[-2]   # vela cerrada
     return {
-        "ema_fast":    float(last["ema_fast"]),
-        "ema_slow":    float(last["ema_slow"]),
-        "rsi":         float(last["rsi"]),
-        "macd":        float(last["macd"]),
-        "macd_signal": float(last["macd_signal"]),
-        "macd_hist":   float(last["macd_hist"]),
-        "bb_upper":    float(last["bb_upper"]),
-        "bb_mid":      float(last["bb_mid"]),
-        "bb_lower":    float(last["bb_lower"]),
-        "adx":         float(last.get("adx", 0) or 0),
+        "ema_fast":       float(last["ema_fast"]),
+        "ema_slow":       float(last["ema_slow"]),
+        "rsi":            float(last["rsi"]),
+        "macd":           float(last["macd"]),
+        "macd_signal":    float(last["macd_signal"]),
+        "macd_hist":      float(last["macd_hist"]),
+        "bb_upper":       float(last["bb_upper"]),
+        "bb_mid":         float(last["bb_mid"]),
+        "bb_lower":       float(last["bb_lower"]),
+        "adx":            float(last.get("adx", 0) or 0),
         "ema_trend_fast": float(last.get("ema_trend_fast", 0) or 0),
         "ema_trend_slow": float(last.get("ema_trend_slow", 0) or 0),
+        "atr":            float(last.get("atr", 0) or 0),
+    }
+
+
+def _extract_ml_features(df_ind, signal, live_price: float) -> dict:
+    """
+    Extrae el vector de features completo para ML en el momento de decisión.
+    Siempre usa la última vela CERRADA (iloc[-2]) para evitar look-ahead.
+
+    Features incluidas:
+      - Indicadores técnicos absolutos y relativos (RSI, MACD, BB, EMA, ADX, ATR)
+      - Posición del precio dentro de las Bandas de Bollinger (normalizada 0-1)
+      - Ratios y diffs para capturar momentum y divergencias
+      - Contexto temporal (hora UTC, día de semana) — captura estacionalidad
+    """
+    valid = df_ind.dropna()
+    if len(valid) < 3:
+        return {}
+    curr = valid.iloc[-2]
+    prev = valid.iloc[-3]
+
+    close     = float(curr["close"])
+    bb_upper  = float(curr.get("bb_upper", close) or close)
+    bb_lower  = float(curr.get("bb_lower", close) or close)
+    bb_mid    = float(curr.get("bb_mid",   close) or close)
+    bb_range  = max(bb_upper - bb_lower, 1e-10)
+    ema_fast  = float(curr.get("ema_fast", close) or close)
+    ema_slow  = float(curr.get("ema_slow", close) or close)
+    atr       = float(curr.get("atr", 0) or 0)
+    rsi       = float(curr.get("rsi", 50) or 50)
+    rsi_prev  = float(prev.get("rsi", 50) or 50)
+    macd_hist = float(curr.get("macd_hist", 0) or 0)
+    mh_prev   = float(prev.get("macd_hist", 0) or 0)
+    adx       = float(curr.get("adx", 0) or 0)
+    vol       = float(curr.get("volume", 0) or 0)
+    vol_prev  = float(prev.get("volume", 1) or 1)
+
+    ts = curr.name if hasattr(curr, "name") else None
+
+    return {
+        # RSI
+        "rsi":              round(rsi, 2),
+        "rsi_diff":         round(rsi - rsi_prev, 4),
+        # MACD
+        "macd_hist":        round(macd_hist, 6),
+        "macd_hist_diff":   round(macd_hist - mh_prev, 6),
+        # Bollinger (posición normalizada 0=lower, 1=upper)
+        "bb_pos":           round((close - bb_lower) / bb_range, 4),
+        "bb_width":         round(bb_range / max(bb_mid, 1e-10), 4),
+        # EMAs
+        "ema_ratio":        round(ema_fast / max(ema_slow, 1e-10), 6),
+        "price_vs_ema_fast": round((live_price - ema_fast) / max(ema_fast, 1e-10), 6),
+        # ATR normalizado (volatilidad relativa al precio)
+        "atr_pct":          round(atr / max(live_price, 1e-10), 6),
+        # ADX (fuerza de tendencia)
+        "adx":              round(adx, 2),
+        # Volumen relativo vs vela anterior
+        "vol_ratio":        round(vol / max(vol_prev, 1e-10), 4),
+        # Tendencia del signal
+        "trend":            {"up": 1, "down": -1, "neutral": 0}.get(signal.trend, 0),
+        "signal_score":     signal.score,
+        # Contexto temporal (estacionalidad)
+        "hour_utc":         ts.hour         if ts is not None else -1,
+        "day_of_week":      ts.dayofweek    if ts is not None else -1,
     }
 
 
@@ -132,12 +196,31 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
                 alerts.notify_trade_closed(symbol, closed.entry_price, live_price,
                                             closed.pnl_usdt or 0, closed.pnl_pct or 0,
                                             trigger)
+                # Feature logging: registrar outcome del trade
+                analyst.log_outcome(
+                    trade_id=closed.id, symbol=symbol,
+                    exit_reason=trigger,
+                    pnl_pct=closed.pnl_pct or 0,
+                    pnl_usdt=closed.pnl_usdt or 0,
+                )
             analyst.log_cycle(live_price, ind_snap, strategy.evaluate(df_ind),
                               trade_action="CLOSED", symbol=symbol)
             return
 
-        # 2. Evaluar señal y actuar
-        signal = strategy.evaluate(df_ind)
+        # 2. Evaluar señal — multi-timeframe si está habilitado
+        if config.USE_MTF:
+            try:
+                df_macro = fetcher.fetch_ohlcv(
+                    symbol, timeframe=config.MTF_TIMEFRAME) \
+                    if label == "STOCK" else fetcher.fetch_ohlcv(
+                        symbol=symbol, timeframe=config.MTF_TIMEFRAME)
+                signal = strategy.evaluate_mtf(df_ind, df_macro)
+            except Exception as e:
+                logger.warning(f"  {symbol:<{width}} MTF fetch falló ({e}) — usando solo 30m")
+                signal = strategy.evaluate(df_ind)
+        else:
+            signal = strategy.evaluate(df_ind)
+
         signal.price = live_price   # precio vivo, no el de la vela cerrada
         trade_action = None
         acted = False
@@ -149,7 +232,14 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
             )
 
         if signal.type == "BUY" and not executor.has_open_trade(symbol):
-            if capital > 10:
+            # ── Cap global de exposición ──────────────────────────────────────
+            exposure = executor.total_exposure_pct(capital)
+            if exposure >= config.MAX_TOTAL_EXPOSURE_PCT:
+                logger.warning(
+                    f"  {symbol:<{width}} BUY bloqueado — exposición global "
+                    f"{exposure*100:.1f}% ≥ {config.MAX_TOTAL_EXPOSURE_PCT*100:.0f}%"
+                )
+            elif capital > 10:
                 trade = executor.open_trade(symbol, signal, capital)
                 if trade:
                     trade_action = "OPENED"
@@ -157,6 +247,16 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
                     alerts.notify_trade_opened(symbol, trade.entry_price,
                                                 trade.quantity, trade.stop_loss,
                                                 trade.take_profit, signal.reason)
+                    # Feature logging: vector completo en el momento de la entrada
+                    ml_features = _extract_ml_features(df_ind, signal, live_price)
+                    if ml_features:
+                        analyst.log_features(
+                            symbol=symbol,
+                            trade_id=trade.id,
+                            price=live_price,
+                            features=ml_features,
+                            signal_type="BUY",
+                        )
             else:
                 logger.warning(f"  {symbol:<{width}} Balance insuficiente.")
 
@@ -164,7 +264,6 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
               and executor.has_open_trade(symbol)
               and not config.DISABLE_SIGNAL_EXIT):
             # Cambio quirúrgico v2: SIGNAL solo cierra si hay pérdida REAL (con buffer)
-            # Evita cortes por tick rojo cuando el trade está esencialmente breakeven
             open_trade = executor.get_open_trade(symbol)
             entry = (open_trade.entry_price if open_trade else live_price) or live_price
             loss_threshold = entry * (1 - config.SIGNAL_EXIT_LOSS_BUFFER_PCT)
@@ -178,6 +277,13 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
                 alerts.notify_trade_closed(symbol, closed.entry_price, live_price,
                                             closed.pnl_usdt or 0, closed.pnl_pct or 0,
                                             "SIGNAL")
+                # Feature logging: outcome
+                analyst.log_outcome(
+                    trade_id=closed.id, symbol=symbol,
+                    exit_reason="SIGNAL",
+                    pnl_pct=closed.pnl_pct or 0,
+                    pnl_usdt=closed.pnl_usdt or 0,
+                )
 
         persist_signal(symbol, signal, acted)
         analyst.log_cycle(live_price, ind_snap, signal,

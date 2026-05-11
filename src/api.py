@@ -429,6 +429,13 @@ def get_ml_report(request: Request):
     return ml_analyst.evaluate_strategy()
 
 
+@app.get("/api/features/summary")
+@limiter.limit("30/minute")
+def get_features_summary(request: Request):
+    """Estado del feature log para ML: cuántos trades etiquetados, si ya se puede entrenar."""
+    return analyst.features_summary()
+
+
 @app.get("/api/per-symbol")
 @limiter.limit("30/minute")
 def per_symbol_stats(request: Request):

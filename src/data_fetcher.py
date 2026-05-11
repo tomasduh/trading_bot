@@ -68,7 +68,10 @@ def _wrap_call(fn, *args, **kwargs):
 def fetch_ohlcv(symbol: str = config.SYMBOL,
                 timeframe: str = config.TIMEFRAME,
                 limit: int = config.CANDLES_LIMIT) -> pd.DataFrame:
-    raw = _wrap_call(exchange.fetch_ohlcv, symbol, timeframe=timeframe, limit=limit)
+    # Para timeframes más largos (4h) usamos menos velas pero suficientes para indicadores
+    effective_limit = limit if timeframe == config.TIMEFRAME else max(100, limit)
+    raw = _wrap_call(exchange.fetch_ohlcv, symbol, timeframe=timeframe,
+                     limit=effective_limit)
     df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     df = df.set_index("timestamp").sort_index()

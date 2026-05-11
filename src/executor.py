@@ -38,6 +38,24 @@ class TradeExecutor:
     def get_open_trade(self, symbol: str) -> Trade | None:
         return self._open_trades.get(symbol)
 
+    def total_exposure_pct(self, capital: float) -> float:
+        """
+        Calcula el % del capital actualmente en riesgo en todos los trades abiertos.
+
+        Riesgo por trade = (entry_price - stop_loss) × quantity
+        → es el importe máximo que se perdería si todos los SL se activan hoy.
+
+        Se usa para bloquear nuevas entradas cuando la exposición global
+        supera MAX_TOTAL_EXPOSURE_PCT (config.py).
+        """
+        if capital <= 0:
+            return 0.0
+        open_risk = sum(
+            max(0.0, (t.entry_price - (t.stop_loss or 0)) * (t.quantity or 0))
+            for t in self._open_trades.values() if t
+        )
+        return open_risk / capital
+
     # ── Apertura ──────────────────────────────────────────────────────────────
 
     def open_trade(self, symbol: str, signal: Signal, capital_usdt: float) -> Trade | None:
