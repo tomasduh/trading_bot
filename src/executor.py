@@ -11,6 +11,28 @@ from src.strategy import Signal
 logger = logging.getLogger("bot")
 
 
+def _get_fetcher_for(symbol: str):
+    """Devuelve el fetcher correcto según el tipo de símbolo.
+
+    Crypto (contiene '/') → src.data_fetcher (Binance)
+    Stocks (sin '/')      → src.alpaca_fetcher (Alpaca)
+    """
+    if "/" in symbol:
+        return data_fetcher
+    # Import perezoso para no romper si Alpaca no está configurado en entornos de test
+    from src import alpaca_fetcher
+    return alpaca_fetcher
+
+
+def _has_api_credentials_for(symbol: str) -> bool:
+    """¿Hay credenciales válidas para operar este símbolo?"""
+    if "/" in symbol:
+        return bool(config.API_KEY)
+    # Stocks: chequea credenciales de Alpaca
+    import os
+    return bool(os.getenv("ALPACA_API_KEY", "").strip())
+
+
 class TradeExecutor:
     def __init__(self):
         # Un trade abierto por símbolo: {"BTC/USDT": Trade | None, ...}
@@ -77,9 +99,10 @@ class TradeExecutor:
         logger.info(f"[{symbol}] Abriendo BUY {qty} @ {signal.price:,.2f} | SL={sl:,.2f} TP={tp:,.2f}")
 
         order = {}
-        if config.API_KEY:
+        if _has_api_credentials_for(symbol):
+            fetcher = _get_fetcher_for(symbol)
             try:
-                order = data_fetcher.create_market_order(symbol, "buy", qty)
+                order = fetcher.create_market_order(symbol, "buy", qty)
             except Exception as e:
                 logger.error(f"[{symbol}] Error al ejecutar orden: {e}")
                 return None
@@ -121,9 +144,10 @@ class TradeExecutor:
             f"{reason} | PnL: {pnl_usdt:+.2f} USDT ({pnl_pct*100:+.2f}%)"
         )
 
-        if config.API_KEY:
+        if _has_api_credentials_for(symbol):
+            fetcher = _get_fetcher_for(symbol)
             try:
-                data_fetcher.create_market_order(symbol, "sell", trade.quantity)
+                fetcher.create_market_order(symbol, "sell", trade.quantity)
             except Exception as e:
                 logger.error(f"[{symbol}] Error al cerrar orden: {e}")
 
