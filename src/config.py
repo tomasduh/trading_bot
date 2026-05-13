@@ -22,17 +22,28 @@ CRYPTO_SYMBOLS = [
     "ETH/USDT",
     "SOL/USDT",
     "BNB/USDT",
+    "XRP/USDT",
 ]
 
 # Stocks de Alpaca — solo opera en horario de mercado (9:30-16:00 ET lun-vie)
 STOCK_SYMBOLS = [
+    # Big Tech (Mag 7)
     "AAPL",
-    "NVDA",
-    "TSLA",
-    "SPY",
-    "NU",
     "MSFT",
     "META",
+    "NVDA",
+    "TSLA",
+    "GOOGL",   # nuevo — Mag 7 que faltaba
+    "AMZN",    # nuevo — Mag 7 que faltaba
+    # Semis
+    "AMD",     # nuevo — alternativa a NVDA (no 100% correlacionado)
+    # ETFs
+    "SPY",
+    "QQQ",     # nuevo — ETF tech (complemento a SPY)
+    # Crypto-correlated
+    "COIN",    # nuevo — Coinbase, correlacionado con cripto
+    # Otros
+    "NU",
 ]
 
 SYMBOLS = CRYPTO_SYMBOLS  # legacy

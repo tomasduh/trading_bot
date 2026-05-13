@@ -21,6 +21,7 @@ _SYMBOL_LIMITS = {
     "ETH/USDT": {"step": 0.0001,  "min_qty": 0.0001,  "min_notional": 5.0,  "price_decimals": 2},
     "SOL/USDT": {"step": 0.001,   "min_qty": 0.001,   "min_notional": 5.0,  "price_decimals": 3},
     "BNB/USDT": {"step": 0.001,   "min_qty": 0.001,   "min_notional": 5.0,  "price_decimals": 2},
+    "XRP/USDT": {"step": 0.1,     "min_qty": 0.1,     "min_notional": 5.0,  "price_decimals": 4},
 }
 # Stocks: shares enteras
 _STOCK_DEFAULT = {"step": 1.0, "min_qty": 1.0, "min_notional": 1.0, "price_decimals": 2}
