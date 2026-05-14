@@ -402,6 +402,13 @@ def root(request: Request):
     return FileResponse(str(STATIC_DIR / "index.html"))
 
 
+@app.get("/favicon.ico")
+@limiter.limit("60/minute")
+def favicon(request: Request):
+    """Sirve el favicon SVG en /favicon.ico (path tradicional que piden browsers)."""
+    return FileResponse(str(STATIC_DIR / "favicon.svg"), media_type="image/svg+xml")
+
+
 @app.get("/api/candles/{symbol:path}")
 @limiter.limit("60/minute")
 def get_candles(request: Request, symbol: str, limit: int = 100):
