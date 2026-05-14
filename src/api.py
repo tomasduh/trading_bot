@@ -201,15 +201,29 @@ async def watch_data():
 
 
 async def push_heartbeat():
-    """Envía un heartbeat cada 10s para que el cliente detecte stale data."""
+    """Heartbeat cada 10s. Si hay posiciones abiertas, también empuja status
+    con precios live (Alpaca latest_trade) para que MTM/PnL actualicen sin
+    esperar al próximo ciclo del bot (10 min)."""
+    iter_count = 0
     while True:
         await asyncio.sleep(10)
+        iter_count += 1
         try:
             await manager.broadcast({
                 "type": "heartbeat",
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "paused": PAUSE_FILE.exists(),
             })
+            # Cada 30s (3 iter) push status si hay open trades — refresca MTM
+            if iter_count % 3 == 0:
+                try:
+                    with get_session() as s:
+                        has_open = s.query(Trade).filter(Trade.status == "OPEN").count() > 0
+                    if has_open:
+                        status = _build_status()
+                        await manager.broadcast({"type": "status", "data": status})
+                except Exception as e:
+                    logger.warning("status refresh error: %s", e)
         except Exception as e:
             logger.warning("heartbeat error: %s", e)
 
@@ -260,11 +274,17 @@ def _build_status() -> dict:
         wins    = sum(1 for t in closed if (t.pnl_usdt or 0) > 0)
         pnl_sum = sum(t.pnl_usdt or 0 for t in closed)
 
-        # Para cada trade abierto, anexar precio actual y PnL marked-to-market
+        # Para cada trade abierto, anexar precio actual y PnL marked-to-market.
+        # Para STOCKS: precio LIVE vía get_stock_latest_trade (real-time).
+        # Para CRYPTO: último candle close de la DB (feed Binance es confiable).
         open_list = []
         for t in open_trades:
             s.expunge(t)
-            current_price = _last_known_price(s, t.symbol)
+            if t.symbol in STOCK_SYMBOLS:
+                live = _fetch_stock_price_fallback(t.symbol)
+                current_price = live if live > 0 else _last_known_price(s, t.symbol)
+            else:
+                current_price = _last_known_price(s, t.symbol)
             mtm_pnl = ((current_price or t.entry_price) - t.entry_price) * t.quantity
             mtm_pct = ((current_price or t.entry_price) - t.entry_price) / t.entry_price
             open_list.append({
