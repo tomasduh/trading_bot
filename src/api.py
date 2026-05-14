@@ -304,9 +304,19 @@ def _last_known_price(session, symbol: str) -> float | None:
 
 
 def _fetch_stock_price_fallback(symbol: str) -> float:
-    """Obtiene el último precio de un stock desde Alpaca histórico (funciona con mercado cerrado)."""
+    """Obtiene el último precio REAL de un stock vía Alpaca get_stock_latest_trade.
+
+    Este endpoint SÍ funciona en tiempo real con feed IEX gratis (a diferencia
+    de get_stock_bars que devuelve data stale). Se usa como fallback cuando
+    la DB tiene una candle vieja por el bug del feed.
+    """
     try:
         from src import alpaca_fetcher
+        # Preferir el endpoint en tiempo real
+        live = alpaca_fetcher.get_latest_trade_price(symbol)
+        if live and live > 0:
+            return live
+        # Fallback al daily si latest_trade falla
         df = alpaca_fetcher.fetch_ohlcv(symbol, timeframe="1d", limit=1)
         if not df.empty:
             return float(df["close"].iloc[-1])
@@ -328,10 +338,15 @@ def _build_signals() -> list:
             if sig: s.expunge(sig)
             if candle: s.expunge(candle)
 
-            # Si no hay candle en DB (ej: mercado cerrado), intentar fetch histórico
-            price = candle.close if candle else 0
-            if price == 0 and symbol in STOCK_SYMBOLS:
-                price = _fetch_stock_price_fallback(symbol)
+            # Para STOCKS: siempre intentar precio live (la candle DB puede estar
+            # stale por bug del feed IEX en get_stock_bars). Si latest_trade falla,
+            # caer al close de la última candle conocida.
+            # Para CRYPTO: el feed Binance es confiable → usar close de la DB directamente.
+            if symbol in STOCK_SYMBOLS:
+                live_price = _fetch_stock_price_fallback(symbol)
+                price = live_price if live_price > 0 else (candle.close if candle else 0)
+            else:
+                price = candle.close if candle else 0
 
             result.append({
                 "symbol":    symbol,
