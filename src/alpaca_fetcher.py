@@ -3,6 +3,7 @@ Fetcher para Alpaca Paper Trading (stocks).
 Equivalente a data_fetcher.py pero para acciones US.
 """
 import os
+import logging
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
@@ -12,9 +13,17 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
+from alpaca.data.requests import StockBarsRequest, StockLatestTradeRequest
 from alpaca.data.enums import DataFeed
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+
+logger = logging.getLogger("alpaca_fetcher")
+
+# Si el último bar es más viejo que esto durante horario de mercado,
+# consideramos que el feed está stale y rechazamos la data.
+# El IEX feed (free) tiene baja cobertura para algunos stocks → bars viejos
+# mientras get_stock_latest_trade() sí devuelve precios frescos.
+MAX_STALENESS_MINUTES = 60
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -68,7 +77,52 @@ def fetch_ohlcv(symbol: str, timeframe: str = "15m", limit: int = 200) -> pd.Dat
 
     df.index = pd.to_datetime(df.index, utc=True)
     df = df[["open","high","low","close","volume"]].sort_index()
-    return df.tail(limit)
+    df = df.tail(limit)
+
+    # ── Validación de frescura ─────────────────────────────────────────────
+    # El feed IEX (gratis) de Alpaca tiene cobertura limitada para algunos
+    # stocks → puede devolver bars del 20 abril aunque hoy sea 14 mayo.
+    # Para evitar operar con data stale (lo que causó el bug AMD #9 a $274
+    # cuando el precio real era $452), validamos contra get_stock_latest_trade
+    # que SÍ funciona en tiempo real con IEX.
+    if not df.empty:
+        try:
+            last_bar_ts = df.index[-1].to_pydatetime()
+            if last_bar_ts.tzinfo is None:
+                last_bar_ts = last_bar_ts.replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            staleness_min = (now - last_bar_ts).total_seconds() / 60
+
+            # Solo validar durante horario probable de mercado (lun-vie 13-22 UTC ≈ 9-17 ET).
+            # Fuera de eso, datos "viejos" son normales (cerrado).
+            if 0 <= now.weekday() <= 4 and 13 <= now.hour <= 22:
+                if staleness_min > MAX_STALENESS_MINUTES:
+                    logger.warning(
+                        "[%s] Feed STALE: último bar de hace %.0f min (límite %d). "
+                        "Rechazando data — no operar este símbolo.",
+                        symbol, staleness_min, MAX_STALENESS_MINUTES
+                    )
+                    return pd.DataFrame(columns=["open","high","low","close","volume"])
+        except Exception as e:
+            logger.warning("[%s] Error validando frescura: %s", symbol, e)
+
+    return df
+
+
+def get_latest_trade_price(symbol: str) -> float | None:
+    """Devuelve el precio del último trade en tiempo real (independiente de get_stock_bars).
+
+    Útil cuando get_stock_bars devuelve data stale — get_stock_latest_trade
+    funciona correctamente con feed IEX gratuito y da precios en tiempo real.
+    """
+    try:
+        req = StockLatestTradeRequest(symbol_or_symbols=symbol)
+        result = data_client.get_stock_latest_trade(req)
+        if symbol in result:
+            return float(result[symbol].price)
+    except Exception as e:
+        logger.warning("[%s] get_latest_trade_price falló: %s", symbol, e)
+    return None
 
 
 def fetch_balance() -> dict:
