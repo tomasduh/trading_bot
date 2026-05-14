@@ -48,22 +48,29 @@ _TF_MAP = {
 
 def fetch_ohlcv(symbol: str, timeframe: str = "15m", limit: int = 200) -> pd.DataFrame:
     tf = _TF_MAP.get(timeframe, TimeFrame(15, TimeFrameUnit.Minute))
-    # Alpaca no acepta 'limit', usa ventana de tiempo — calculamos rango necesario
     end = datetime.now(timezone.utc)
-    # Ventana de tiempo según timeframe para cubrir `limit` velas de mercado
-    tf_hours = {"1m": 1/60, "5m": 5/60, "15m": 0.25, "30m": 0.5,
-                "1h": 1, "4h": 4, "1d": 24}.get(timeframe, 0.25)
-    # Mercado abierto ~6.5h/día × 5 días = 32.5h/semana; multiplicamos por 3 para holgura
-    market_days_needed = max(14, int(limit * tf_hours / 6.5 * 3))
-    start = end - timedelta(days=market_days_needed)
+
+    # ⚠️ BUG conocido de Alpaca: cuando pasas (start, end, limit) y limit < total
+    # de bars del rango, devuelve los PRIMEROS limit bars (los más viejos).
+    # Para obtener los más recientes hay que pedir TODOS los bars del rango
+    # (limit alto) y luego hacer tail(N) en cliente.
+    tf_minutes = {"1m": 1, "5m": 5, "15m": 15, "30m": 30,
+                  "1h": 60, "4h": 240, "1d": 1440}.get(timeframe, 30)
+    # Cuántos días naturales necesitamos: limit velas × tf_min, asumiendo
+    # mercado abierto ~6.5h/día → factor 24/6.5 ≈ 3.7 + buffer fin de semana.
+    market_minutes_needed = limit * tf_minutes
+    calendar_days_needed = max(7, int(market_minutes_needed / 60 / 6.5 * 2) + 3)
+    start = end - timedelta(days=calendar_days_needed)
 
     req = StockBarsRequest(
         symbol_or_symbols=symbol,
         timeframe=tf,
         start=start,
         end=end,
-        limit=limit,
-        feed=DataFeed.IEX,   # plan free usa IEX, no SIP
+        # limit alto para asegurar que Alpaca devuelva TODOS los bars del rango
+        # (luego tail(limit) abajo selecciona los más recientes).
+        limit=10000,
+        feed=DataFeed.IEX,
     )
     bars = data_client.get_stock_bars(req)
     df = bars.df
