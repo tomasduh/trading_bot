@@ -26,6 +26,15 @@ from src.database import Trade, get_session
 logger = logging.getLogger("circuit_breaker")
 
 
+def _aware(dt: Optional[datetime]) -> Optional[datetime]:
+    """Normaliza datetime a timezone-aware UTC (los viejos en SQLite no tienen tz)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 class CircuitBreaker:
     """Evalúa condiciones de riesgo y decide si pausar el bot.
 
@@ -57,7 +66,7 @@ class CircuitBreaker:
             hour=0, minute=0, second=0, microsecond=0)
         today_trades = [
             t for t in trades
-            if t.exit_time and t.exit_time.replace(tzinfo=timezone.utc) >= today_start
+            if t.exit_time and _aware(t.exit_time) >= today_start
         ]
         daily_pnl = sum(t.pnl_usdt or 0 for t in today_trades)
         daily_dd_pct = abs(daily_pnl) / self.initial_capital * 100 if daily_pnl < 0 else 0
@@ -82,7 +91,7 @@ class CircuitBreaker:
         # ── Condición 3: Trades perdedores consecutivos ──────────────────────
         closed_sorted = sorted(
             [t for t in trades if t.exit_time],
-            key=lambda t: t.exit_time,
+            key=lambda t: _aware(t.exit_time),
         )
         consecutive = 0
         for t in reversed(closed_sorted):
@@ -103,18 +112,20 @@ class CircuitBreaker:
         return False, ""
 
     def _load_recent_trades(self) -> list:
-        """Carga trades cerrados de los últimos 30 días."""
+        """Carga trades cerrados de los últimos 30 días.
+        Cargamos sin filtro de fecha en SQL y normalizamos timezones en Python
+        para evitar mezclas tz-naive vs tz-aware (SQLite no preserva tz)."""
         cutoff = datetime.now(timezone.utc) - timedelta(days=30)
         with get_session() as s:
             trades = (
                 s.query(Trade)
                 .filter(Trade.status == "CLOSED")
-                .filter(Trade.exit_time >= cutoff)
                 .all()
             )
             for t in trades:
                 s.expunge(t)
-        return trades
+        # Filtrar en Python (post-fetch) con datetime normalizado
+        return [t for t in trades if t.exit_time and _aware(t.exit_time) >= cutoff]
 
 
 # Instancia global — se crea en bot.py con el capital correcto
