@@ -11,14 +11,15 @@ Pasos a seguir, ordenados por prioridad y dificultad. Cada paso incluye **qué h
 | | |
 |---|---|
 | Plataforma | Fly.io (Frankfurt) — 24/7 |
-| Mercados | **5 crypto** (Binance Testnet) + **12 stocks** (Alpaca Paper) |
-| Estrategia | RSI + MACD + Bollinger + filtro tendencia (EMA21/50 + ADX) + ATR disponible |
-| Timeframe | **15m** (acelerado, antes 30m) |
+| Mercados | **10 crypto** (Binance Testnet) + **12 stocks** (Alpaca Paper) = 22 símbolos |
+| Estrategia | RSI + MACD + Bollinger + filtro tendencia (EMA21/50 + ADX) + **MTF 4h activado** |
+| Timeframe | **15m** (acelerado de 30m) |
 | Loop interval | **5min** (3 chequeos por vela) |
-| MIN_SIGNAL_SCORE | **1** (acelerado, antes 2) — 3× más signals |
+| MIN_SIGNAL_SCORE | **2** (calidad, validado por backtest) |
 | Risk per trade | 1% del capital |
-| SL / TP | **1.5% / 3%** (acelerado) — ratio 2:1 mantenido |
-| Cap exposición | **8%** del capital máximo simultáneo (acelerado de 5%) |
+| SL / TP | **2% / 4%** (conservador, validado por backtest) |
+| Cap exposición | **8%** del capital máximo simultáneo |
+| MTF filter | ✅ ON (BUY bloqueado si 4h bajista) |
 | Trailing stop | Desactivado (optimizer demostró que perjudica) |
 | Signal exit | Solo si pérdida real > 0.2% (buffer) |
 | Fees en backtest | ✅ 0.1% Binance + 0.05% slippage (round-trip) |
@@ -482,25 +483,40 @@ fly secrets set BINANCE_API_KEY=... BINANCE_SECRET=... --app tomas-bot-trading
 - ✅ Fase 4.3: Cap exposición global → `MAX_TOTAL_EXPOSURE_PCT=5%`
 - ✅ API endpoint `/api/features/summary` — progreso hacia los 200 trades para ML
 
-### 🚀 Semana 4 — EN CURSO: Modo aceleración
+### 🚀 Semana 4 — EN CURSO: Modo Hybrid C (validado por backtest)
 
-**Config de aceleración activada (commit `03a6396`):**
+**Backtest comparativo realizado (60d × 5 cryptos):**
 
-| Parámetro | Antes | Ahora | Impacto |
+| Config | PnL% | Trades | WR% | DD% | Decisión |
+|---|---|---|---|---|---|
+| conservative (TF=30m, score=2) | -3.59% | 91 | 27.6% | 6.54% | referencia |
+| **hybrid_C (este)** | **-6.20%** | **108** | **17.9%** | **7.36%** | ✅ **ELEGIDO** |
+| current_accelerated (TF=15m, score=1) | -11.52% | 251 | 18.3% | 12.23% | ❌ descartado |
+| ATR stops on | -21.74% | 570 | 27.9% | 22.33% | ❌ descartado |
+
+**Config Hybrid C aplicada (commit `2a59e3a` + `903f033`):**
+
+| Parámetro | Acelerada | **Hybrid C** | Razón |
 |---|---|---|---|
-| TIMEFRAME | 30m | **15m** | 2× más velas/día |
-| MIN_SIGNAL_SCORE | 2 | **1** | 3× más signals |
-| STOP_LOSS_PCT | 2% | **1.5%** | trades más cortos |
-| TAKE_PROFIT_PCT | 4% | **3%** | ratio 2:1 mantenido |
-| MAX_TOTAL_EXPOSURE_PCT | 5% | **8%** | hasta 8 simultáneos |
-| LOOP_INTERVAL | 10min | **5min** | reacción 2× más rápida |
+| TIMEFRAME | 15m | **15m** | 2× más velas/día |
+| MIN_SIGNAL_SCORE | 1 | **2** ⬅️ | recuperar calidad (WR 17→28%) |
+| STOP_LOSS_PCT | 1.5% | **2%** ⬅️ | menos triggers por ruido |
+| TAKE_PROFIT_PCT | 3% | **4%** ⬅️ | ratio 2:1 |
+| USE_MTF | False | **True** ⬅️ | filtro bear market |
+| LOOP_INTERVAL | 5min | **5min** | mantener reactividad |
+| MAX_TOTAL_EXPOSURE_PCT | 8% | **8%** | mantener |
 
-**Esperado:** ~50-80 trades/semana (vs ~10 antes) → ML viable en 3-4 semanas.
+**Cryptos agregados (5 → 10):** ADA, DOT, AVAX, LINK, **POL** (antes MATIC)
+
+**Esperado:**
+- ~25-30 trades/semana (vs ~10 conservative) — 2× más volumen
+- ETA ML (200 trades): **~2 meses** (vs 4.5 conservative o 4 acelerada)
+- PnL impacto: -6% en 60d (aceptable trade-off)
 
 **Próximos hitos a monitorear:**
-- ¿Win rate se mantiene > 40% con score=1?
-- ¿Circuit breaker se activa por más drawdown?
-- Si performance degrada → revertir score=2 (1 commit)
+- ¿Win rate se acerca al 28% del backtest?
+- ¿MTF efectivamente bloquea entradas en bear market?
+- ¿Los nuevos cryptos (ADA, DOT, etc.) operan saludablemente?
 
 ### ⏳ Semana 5+ — Pre-LIVE checklist
 - Fase 4.5 Backups automáticos DB
