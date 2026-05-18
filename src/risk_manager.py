@@ -17,11 +17,17 @@ from src import config
 #     simplicidad y para evitar errores en órdenes market, usamos enteros).
 # Estos defaults se pueden refinar con exchange.markets[symbol]['limits'].
 _SYMBOL_LIMITS = {
-    "BTC/USDT": {"step": 0.00001, "min_qty": 0.00001, "min_notional": 5.0,  "price_decimals": 2},
-    "ETH/USDT": {"step": 0.0001,  "min_qty": 0.0001,  "min_notional": 5.0,  "price_decimals": 2},
-    "SOL/USDT": {"step": 0.001,   "min_qty": 0.001,   "min_notional": 5.0,  "price_decimals": 3},
-    "BNB/USDT": {"step": 0.001,   "min_qty": 0.001,   "min_notional": 5.0,  "price_decimals": 2},
-    "XRP/USDT": {"step": 0.1,     "min_qty": 0.1,     "min_notional": 5.0,  "price_decimals": 4},
+    "BTC/USDT":   {"step": 0.00001, "min_qty": 0.00001, "min_notional": 5.0, "price_decimals": 2},
+    "ETH/USDT":   {"step": 0.0001,  "min_qty": 0.0001,  "min_notional": 5.0, "price_decimals": 2},
+    "SOL/USDT":   {"step": 0.001,   "min_qty": 0.001,   "min_notional": 5.0, "price_decimals": 3},
+    "BNB/USDT":   {"step": 0.001,   "min_qty": 0.001,   "min_notional": 5.0, "price_decimals": 2},
+    "XRP/USDT":   {"step": 0.1,     "min_qty": 0.1,     "min_notional": 5.0, "price_decimals": 4},
+    # Agregados (hybrid_C sprint)
+    "ADA/USDT":   {"step": 0.1,     "min_qty": 0.1,     "min_notional": 5.0, "price_decimals": 4},
+    "DOT/USDT":   {"step": 0.01,    "min_qty": 0.01,    "min_notional": 5.0, "price_decimals": 3},
+    "AVAX/USDT":  {"step": 0.01,    "min_qty": 0.01,    "min_notional": 5.0, "price_decimals": 2},
+    "LINK/USDT":  {"step": 0.01,    "min_qty": 0.01,    "min_notional": 5.0, "price_decimals": 3},
+    "MATIC/USDT": {"step": 0.1,     "min_qty": 0.1,     "min_notional": 5.0, "price_decimals": 4},
 }
 # Stocks: shares enteras
 _STOCK_DEFAULT = {"step": 1.0, "min_qty": 1.0, "min_notional": 1.0, "price_decimals": 2}

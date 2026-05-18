@@ -23,6 +23,12 @@ CRYPTO_SYMBOLS = [
     "SOL/USDT",
     "BNB/USDT",
     "XRP/USDT",
+    # Agregados (Sprint hybrid_C): más volumen sin sacrificar calidad
+    "ADA/USDT",
+    "DOT/USDT",
+    "AVAX/USDT",
+    "LINK/USDT",
+    "MATIC/USDT",
 ]
 
 # Stocks de Alpaca — solo opera en horario de mercado (9:30-16:00 ET lun-vie)
@@ -48,10 +54,13 @@ STOCK_SYMBOLS = [
 
 SYMBOLS = CRYPTO_SYMBOLS  # legacy
 SYMBOL  = CRYPTO_SYMBOLS[0]
-# Acelerado: 15m da 2× más velas que 30m → 2× más oportunidades de señales.
-# Combinado con MIN_SIGNAL_SCORE=1 (de 2) y stops ajustados, esperamos ~5-8×
-# más trades por semana — necesario para acumular 200 trades para ML en plazo
-# razonable (3-4 semanas vs 100 semanas con la config conservadora anterior).
+# Config "Hybrid C" (validada por backtest 60d × 5 cryptos):
+#   - TIMEFRAME=15m → 2× más oportunidades vs 30m
+#   - MIN_SIGNAL_SCORE=2 → mantiene calidad de señal
+#   - USE_MTF=True → filtro macro 4h bloquea BUY en bear market
+#   - SL/TP 2%/4% conservadores → no se trigger por ruido
+# Backtest comparativo: hybrid_C dio -6.20% PnL en 60d (vs -3.59% conservative
+# y -11.52% acelerada agresiva). 19% más trades que conservative, 7.36% max DD.
 TIMEFRAME    = "15m"
 # 400 velas × 15m = 100h de mercado; suficiente para EMA200 (warmup 50 con EMA_TREND_SLOW=50)
 CANDLES_LIMIT = 400
@@ -75,21 +84,20 @@ ADX_PERIOD = 14
 ADX_THRESHOLD = 20     # ADX > 20 indica tendencia con fuerza
 
 # ── Estrategia ────────────────────────────────────────────────────────────────
-# Acelerado: con MIN_SIGNAL_SCORE=1 disparamos al cumplirse solo 1 de las 3
-# condiciones. ~3× más signals que score=2. Compensado por el filtro de
-# tendencia (USE_TREND_FILTER) y el circuit breaker (kill-switch en 3% DD).
-MIN_SIGNAL_SCORE = 1          # mínimo de condiciones para disparar señal
+# Hybrid C: score=2 mantiene la calidad de señal (mejor WR que score=1).
+# El backtest mostró que score=1 deteriora WR significativamente (18% vs 27%).
+MIN_SIGNAL_SCORE = 2          # mínimo de condiciones para disparar señal
 USE_TREND_FILTER = True       # solo BUY en tendencia alcista, SELL en bajista
 DISABLE_SIGNAL_EXIT = False   # si True: solo cierra por SL/TP/Trailing, no por SELL signal
 SIGNAL_EXIT_ONLY_IN_LOSS = True  # si True: SELL signal solo cierra si el trade está en pérdida real
 SIGNAL_EXIT_LOSS_BUFFER_PCT = 0.002  # buffer: SIGNAL cierra solo si precio < entrada * (1-buffer) (0.2%)
 
 # ── Gestión de riesgo ─────────────────────────────────────────────────────────
-# Acelerado: stops más cercanos → trades cierran más rápido (~25% menos hold
-# time average) → más oportunidades de re-entrar. Ratio 2:1 SL/TP mantenido.
+# Hybrid C: stops conservadores (2%/4%) según backtest. Los stops ceñidos (1.5%/3%)
+# se trigger por ruido normal del mercado y empeoran PnL.
 RISK_PER_TRADE = 0.01        # 1% del capital por trade (aplicado por símbolo)
-STOP_LOSS_PCT = 0.015        # stop loss 1.5% (antes 2%)
-TAKE_PROFIT_PCT = 0.03       # take profit 3% (antes 4%) — ratio 2:1 mantenido
+STOP_LOSS_PCT = 0.02         # stop loss 2% (conservador, validado por backtest)
+TAKE_PROFIT_PCT = 0.04       # take profit 4% (ratio 2:1)
 MAX_OPEN_TRADES = 1          # máximo 1 posición abierta por símbolo
 
 # Trailing stop: el optimizer demostró que con SL 2% / TP 4% el TS corta trades
@@ -107,9 +115,9 @@ LOG_DIR.mkdir(exist_ok=True)
 # ── Multi-timeframe (Fase 2.2) ────────────────────────────────────────────────
 # USE_MTF=True: añade confirmación de tendencia macro en 4h antes de abrir BUY.
 # Si el 4h está en tendencia bajista → BUY bloqueado aunque el 30m diga BUY.
-# Activar solo después de comparar con backtest (el filtro reduce trades pero
-# mejora calidad si el mercado tiene tendencias claras en 4h).
-USE_MTF         = False        # activar después de backtest comparativo
+# VALIDADO POR BACKTEST: hybrid_C (con MTF on) dio -6.20% PnL vs -8.28% sin MTF
+# en 60d. El filtro macro reduce trades pero mejora PnL en bear markets.
+USE_MTF         = True         # ✅ ACTIVADO (Hybrid C)
 MTF_TIMEFRAME   = "4h"        # timeframe macro para confirmación de tendencia
 
 # ── Cap global de exposición (Fase 4.3) ───────────────────────────────────────
