@@ -27,7 +27,7 @@ _SYMBOL_LIMITS = {
     "DOT/USDT":   {"step": 0.01,    "min_qty": 0.01,    "min_notional": 5.0, "price_decimals": 3},
     "AVAX/USDT":  {"step": 0.01,    "min_qty": 0.01,    "min_notional": 5.0, "price_decimals": 2},
     "LINK/USDT":  {"step": 0.01,    "min_qty": 0.01,    "min_notional": 5.0, "price_decimals": 3},
-    "MATIC/USDT": {"step": 0.1,     "min_qty": 0.1,     "min_notional": 5.0, "price_decimals": 4},
+    "POL/USDT":   {"step": 0.1,     "min_qty": 0.1,     "min_notional": 5.0, "price_decimals": 4},
 }
 # Stocks: shares enteras
 _STOCK_DEFAULT = {"step": 1.0, "min_qty": 1.0, "min_notional": 1.0, "price_decimals": 2}

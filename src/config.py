@@ -28,7 +28,7 @@ CRYPTO_SYMBOLS = [
     "DOT/USDT",
     "AVAX/USDT",
     "LINK/USDT",
-    "MATIC/USDT",
+    "POL/USDT",   # Polygon — antes era MATIC, rebrand 2024
 ]
 
 # Stocks de Alpaca — solo opera en horario de mercado (9:30-16:00 ET lun-vie)
