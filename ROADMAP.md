@@ -6,16 +6,19 @@ Pasos a seguir, ordenados por prioridad y dificultad. Cada paso incluye **qué h
 
 ## 📍 Estado actual (snapshot)
 
-> **Última actualización:** 2026-05-11 — Sprints Semana 1, 2 y 3 completados.
+> **Última actualización:** 2026-05-18 — Sprints 1-3 completados + 6 bugfixes críticos + config de aceleración aplicada.
 
 | | |
 |---|---|
 | Plataforma | Fly.io (Frankfurt) — 24/7 |
-| Mercados | 4 crypto (Binance Testnet) + 7 stocks (Alpaca Paper) |
+| Mercados | **5 crypto** (Binance Testnet) + **12 stocks** (Alpaca Paper) |
 | Estrategia | RSI + MACD + Bollinger + filtro tendencia (EMA21/50 + ADX) + ATR disponible |
-| Timeframe | 30m |
+| Timeframe | **15m** (acelerado, antes 30m) |
+| Loop interval | **5min** (3 chequeos por vela) |
+| MIN_SIGNAL_SCORE | **1** (acelerado, antes 2) — 3× más signals |
 | Risk per trade | 1% del capital |
-| SL / TP | 2% / 4% fijo (ratio 2:1) — ATR-based disponible con `USE_ATR_STOPS=True` |
+| SL / TP | **1.5% / 3%** (acelerado) — ratio 2:1 mantenido |
+| Cap exposición | **8%** del capital máximo simultáneo (acelerado de 5%) |
 | Trailing stop | Desactivado (optimizer demostró que perjudica) |
 | Signal exit | Solo si pérdida real > 0.2% (buffer) |
 | Fees en backtest | ✅ 0.1% Binance + 0.05% slippage (round-trip) |
@@ -34,7 +37,19 @@ Pasos a seguir, ordenados por prioridad y dificultad. Cada paso incluye **qué h
 
 | Commit | Descripción |
 |---|---|
-| `(semana 3)` | feat: Sprint Semana 3 — feature logging ML, multi-timeframe 4h, cap exposición |
+| `03a6396` | **tune: ACELERACIÓN — timeframe 15m, score=1, SL/TP 1.5%/3%, exposure 8%** |
+| `7572837` | fix: posiciones abiertas con precio LIVE + refresh 30s |
+| `6e77535` | feat: favicon Bull Candle |
+| `7e8a31a` | fix: api.py JSON encoding crash en stocks |
+| `304b658` | fix: circuit_breaker tz-naive vs aware |
+| `839a929` | **fix CRÍTICO: paginación de Alpaca devolvía bars VIEJOS (root cause AMD)** |
+| `fcaa1d6` | fix: dashboard muestra precios LIVE |
+| `b97bbd5` | fix: validar frescura de datos en alpaca_fetcher |
+| `be36374` | **fix CRÍTICO: executor enviaba stocks a Binance** |
+| `f43acb0` | feat: XRP + 5 stocks (GOOGL, AMZN, AMD, QQQ, COIN) |
+| `f4141b2` | tune: LOOP_INTERVAL 30→10min |
+| `fa914ed` | fix: persist_candle idempotente |
+| `738a224` | feat: Sprint Semana 3 — feature logging ML, multi-timeframe 4h, cap exposición |
 | `7bba1b3` | feat: Sprint Semana 2 — walk-forward, ATR stops, circuit breaker |
 | `5a12e7a` | feat: Sprint Semana 1 — fees en backtest, reconciliador, watchdog, quick wins |
 | `393f2aa` | docs: ROADMAP.md inicial |
@@ -467,10 +482,34 @@ fly secrets set BINANCE_API_KEY=... BINANCE_SECRET=... --app tomas-bot-trading
 - ✅ Fase 4.3: Cap exposición global → `MAX_TOTAL_EXPOSURE_PCT=5%`
 - ✅ API endpoint `/api/features/summary` — progreso hacia los 200 trades para ML
 
-### ⏳ Semana 4 — PRÓXIMA
-- Fase 2.3: Régimen de mercado (trending / ranging / choppy)
-- Fase 3.2: ML meta-classifier con LightGBM (requiere ≥200 trades en features.jsonl)
-- Quick wins restantes: audit log, test_executor, test_alpaca
+### 🚀 Semana 4 — EN CURSO: Modo aceleración
+
+**Config de aceleración activada (commit `03a6396`):**
+
+| Parámetro | Antes | Ahora | Impacto |
+|---|---|---|---|
+| TIMEFRAME | 30m | **15m** | 2× más velas/día |
+| MIN_SIGNAL_SCORE | 2 | **1** | 3× más signals |
+| STOP_LOSS_PCT | 2% | **1.5%** | trades más cortos |
+| TAKE_PROFIT_PCT | 4% | **3%** | ratio 2:1 mantenido |
+| MAX_TOTAL_EXPOSURE_PCT | 5% | **8%** | hasta 8 simultáneos |
+| LOOP_INTERVAL | 10min | **5min** | reacción 2× más rápida |
+
+**Esperado:** ~50-80 trades/semana (vs ~10 antes) → ML viable en 3-4 semanas.
+
+**Próximos hitos a monitorear:**
+- ¿Win rate se mantiene > 40% con score=1?
+- ¿Circuit breaker se activa por más drawdown?
+- Si performance degrada → revertir score=2 (1 commit)
+
+### ⏳ Semana 5+ — Pre-LIVE checklist
+- Fase 4.5 Backups automáticos DB
+- Telegram alerts en trade open/close + circuit breaker
+- 2FA o IP allowlist dashboard
+- HC_PING_URL configurado en healthchecks.io
+- Fase 3.2 ML meta-classifier (cuando lleguemos a 200 trades labeled)
+- Fase 2.3 Régimen de mercado
+- Quick wins: audit log, test_executor, test_alpaca
 
 ### Semana 4
 - Fase 2.3: Régimen de mercado (trending / ranging / choppy)
