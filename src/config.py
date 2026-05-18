@@ -48,8 +48,12 @@ STOCK_SYMBOLS = [
 
 SYMBOLS = CRYPTO_SYMBOLS  # legacy
 SYMBOL  = CRYPTO_SYMBOLS[0]
-TIMEFRAME    = "30m"
-# 400 velas: suficiente para EMA200 (warmup 200) + 200 velas con todos los indicadores
+# Acelerado: 15m da 2× más velas que 30m → 2× más oportunidades de señales.
+# Combinado con MIN_SIGNAL_SCORE=1 (de 2) y stops ajustados, esperamos ~5-8×
+# más trades por semana — necesario para acumular 200 trades para ML en plazo
+# razonable (3-4 semanas vs 100 semanas con la config conservadora anterior).
+TIMEFRAME    = "15m"
+# 400 velas × 15m = 100h de mercado; suficiente para EMA200 (warmup 50 con EMA_TREND_SLOW=50)
 CANDLES_LIMIT = 400
 
 # ── Indicadores ───────────────────────────────────────────────────────────────
@@ -71,16 +75,21 @@ ADX_PERIOD = 14
 ADX_THRESHOLD = 20     # ADX > 20 indica tendencia con fuerza
 
 # ── Estrategia ────────────────────────────────────────────────────────────────
-MIN_SIGNAL_SCORE = 2          # mínimo de condiciones para disparar señal
+# Acelerado: con MIN_SIGNAL_SCORE=1 disparamos al cumplirse solo 1 de las 3
+# condiciones. ~3× más signals que score=2. Compensado por el filtro de
+# tendencia (USE_TREND_FILTER) y el circuit breaker (kill-switch en 3% DD).
+MIN_SIGNAL_SCORE = 1          # mínimo de condiciones para disparar señal
 USE_TREND_FILTER = True       # solo BUY en tendencia alcista, SELL en bajista
 DISABLE_SIGNAL_EXIT = False   # si True: solo cierra por SL/TP/Trailing, no por SELL signal
 SIGNAL_EXIT_ONLY_IN_LOSS = True  # si True: SELL signal solo cierra si el trade está en pérdida real
 SIGNAL_EXIT_LOSS_BUFFER_PCT = 0.002  # buffer: SIGNAL cierra solo si precio < entrada * (1-buffer) (0.2%)
 
 # ── Gestión de riesgo ─────────────────────────────────────────────────────────
+# Acelerado: stops más cercanos → trades cierran más rápido (~25% menos hold
+# time average) → más oportunidades de re-entrar. Ratio 2:1 SL/TP mantenido.
 RISK_PER_TRADE = 0.01        # 1% del capital por trade (aplicado por símbolo)
-STOP_LOSS_PCT = 0.02         # stop loss 2% bajo el precio de entrada
-TAKE_PROFIT_PCT = 0.04       # take profit 4% sobre el precio de entrada (ratio 2:1)
+STOP_LOSS_PCT = 0.015        # stop loss 1.5% (antes 2%)
+TAKE_PROFIT_PCT = 0.03       # take profit 3% (antes 4%) — ratio 2:1 mantenido
 MAX_OPEN_TRADES = 1          # máximo 1 posición abierta por símbolo
 
 # Trailing stop: el optimizer demostró que con SL 2% / TP 4% el TS corta trades
@@ -104,10 +113,10 @@ USE_MTF         = False        # activar después de backtest comparativo
 MTF_TIMEFRAME   = "4h"        # timeframe macro para confirmación de tendencia
 
 # ── Cap global de exposición (Fase 4.3) ───────────────────────────────────────
-# Limita el riesgo total en vuelo (suma de todos los (entry - SL) × qty activos).
-# Con 4 cryptos × 1% de riesgo cada uno la exposición máxima es 4%.
-# MAX_TOTAL_EXPOSURE_PCT=0.05 da un margen antes de bloquear nuevas entradas.
-MAX_TOTAL_EXPOSURE_PCT = 0.05  # 5% máximo del capital en riesgo simultáneo
+# Acelerado: 8% permite hasta ~8 trades simultáneos (RISK_PER_TRADE=1% cada uno)
+# en lugar de 5. Con 17 símbolos disponibles, este es el verdadero limitador
+# de cuántos trades pueden coexistir y permite aprovechar más oportunidades.
+MAX_TOTAL_EXPOSURE_PCT = 0.08  # 8% máximo del capital en riesgo simultáneo
 
 # ── ATR-based stops (Fase 2.1) ────────────────────────────────────────────────
 # Si USE_ATR_STOPS=True: SL y TP se calculan como múltiplos del ATR en lugar
@@ -142,7 +151,8 @@ SLIPPAGE_PCT = 0.0005    # 0.05% estimado conservador por orden (ambos lados)
 HC_PING_URL = os.getenv("HC_PING_URL", "")
 
 # ── Loop ───────────────────────────────────────────────────────────────────────
-# Bajamos a 10min para que SL/TP, circuit breaker y reconciliador reaccionen
-# 3× más rápido que el timeframe de 30m. Las señales siguen evaluándose sobre
-# velas cerradas de 30m (no cambia la estrategia validada).
-LOOP_INTERVAL_SECONDS = 60 * 10  # cada 10 minutos
+# Acelerado: timeframe=15m → ciclo=5min mantiene el ratio 1:3 (3 chequeos de
+# SL/TP por cada vela cerrada). SL/TP, circuit breaker y reconciliador reaccionan
+# 2× más rápido que con la config anterior (10min/30m=1:3 → 5min/15m=1:3 igual
+# ratio, pero menor latencia absoluta).
+LOOP_INTERVAL_SECONDS = 60 * 5  # cada 5 minutos
