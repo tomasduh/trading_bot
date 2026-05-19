@@ -35,8 +35,27 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(watch_log())
     asyncio.create_task(watch_data())
     asyncio.create_task(push_heartbeat())
+    asyncio.create_task(refresh_prices_loop())  # popula cache de stocks en bg
     yield
-    # cleanup al apagar (no hay nada que limpiar explícitamente)
+
+
+async def refresh_prices_loop():
+    """Refresca el cache de precios de stocks cada 30s en background.
+    No bloquea el event loop (corre en thread pool). Permite que las
+    requests al WS/REST sean instantáneas usando el cache."""
+    # Llenar el cache inmediatamente al arrancar
+    try:
+        await asyncio.to_thread(_refresh_price_cache_sync)
+        logger.info("Stock price cache initialized (%d symbols)", len(_price_cache))
+    except Exception as e:
+        logger.warning("Initial price cache refresh failed: %s", e)
+
+    while True:
+        await asyncio.sleep(30)
+        try:
+            await asyncio.to_thread(_refresh_price_cache_sync)
+        except Exception as e:
+            logger.warning("price refresh loop error: %s", e)
 
 
 app = FastAPI(title="Trading Bot Dashboard", lifespan=lifespan)
@@ -285,13 +304,14 @@ def _build_status() -> dict:
         pnl_sum = sum(t.pnl_usdt or 0 for t in closed)
 
         # Para cada trade abierto, anexar precio actual y PnL marked-to-market.
-        # Para STOCKS: precio LIVE vía get_stock_latest_trade (real-time).
+        # Para STOCKS: usar cache de precios (poblado en background, no bloquea).
+        # Si cache miss → fallback a último candle de DB.
         # Para CRYPTO: último candle close de la DB (feed Binance es confiable).
         open_list = []
         for t in open_trades:
             s.expunge(t)
             if t.symbol in STOCK_SYMBOLS:
-                live = _fetch_stock_price_fallback(t.symbol)
+                live = _fetch_stock_price_fallback(t.symbol, allow_blocking=False)
                 current_price = live if live > 0 else _last_known_price(s, t.symbol)
             else:
                 current_price = _last_known_price(s, t.symbol)
@@ -336,16 +356,18 @@ def _last_known_price(session, symbol: str) -> float | None:
 # Cache de precios live por símbolo: {symbol: (price, expires_at_ts)}
 # Evita llamadas redundantes a Alpaca dentro de la ventana TTL.
 _price_cache: dict[str, tuple[float, float]] = {}
-_PRICE_CACHE_TTL_SECONDS = 20   # refresh cada 20s (heartbeat es cada 10s)
+_PRICE_CACHE_TTL_SECONDS = 60   # refresh cada 60s
+_PRICE_LOCK = asyncio.Lock()    # evitar refresh concurrentes
 
 
-def _fetch_stock_price_fallback(symbol: str) -> float:
-    """Obtiene el último precio REAL de un stock vía Alpaca get_stock_latest_trade.
+def _fetch_stock_price_fallback(symbol: str, allow_blocking: bool = False) -> float:
+    """Obtiene el último precio de un stock.
 
-    Cacheado con TTL 20s para evitar llamadas redundantes — al construir
-    _build_signals() necesitamos 12 precios (uno por stock); sin cache eso
-    eran 12 llamadas síncronas a Alpaca = ~7s de bloqueo del event loop
-    al conectar el WebSocket o ante cada heartbeat.
+    Si allow_blocking=False (default): solo usa cache → 0 si miss.
+    Si allow_blocking=True: hace llamada síncrona a Alpaca si cache miss.
+
+    En _build_signals() y WebSocket connect inicial usar allow_blocking=False
+    (responder rápido). El cache se popula en background via _refresh_price_cache().
     """
     import time
     now = time.time()
@@ -353,22 +375,38 @@ def _fetch_stock_price_fallback(symbol: str) -> float:
     if cached and cached[1] > now:
         return cached[0]
 
+    if not allow_blocking:
+        return 0.0
+
+    # Slow path (allow_blocking=True): query Alpaca live
     price = 0.0
     try:
         from src import alpaca_fetcher
         live = alpaca_fetcher.get_latest_trade_price(symbol)
         if live and live > 0:
             price = live
-        else:
-            df = alpaca_fetcher.fetch_ohlcv(symbol, timeframe="1d", limit=1)
-            if not df.empty:
-                price = float(df["close"].iloc[-1])
     except Exception:
         pass
 
     if price > 0:
         _price_cache[symbol] = (price, now + _PRICE_CACHE_TTL_SECONDS)
     return price
+
+
+def _refresh_price_cache_sync():
+    """Refresca el cache de precios para todos los stocks en background.
+    Se llama desde un task async vía to_thread — toma ~2-5s pero no bloquea
+    el event loop principal."""
+    import time
+    from src import alpaca_fetcher
+    now = time.time()
+    for symbol in STOCK_SYMBOLS:
+        try:
+            live = alpaca_fetcher.get_latest_trade_price(symbol)
+            if live and live > 0:
+                _price_cache[symbol] = (live, now + _PRICE_CACHE_TTL_SECONDS)
+        except Exception as e:
+            logger.debug("refresh price %s: %s", symbol, e)
 
 
 def _build_signals() -> list:
@@ -384,12 +422,10 @@ def _build_signals() -> list:
             if sig: s.expunge(sig)
             if candle: s.expunge(candle)
 
-            # Para STOCKS: siempre intentar precio live (la candle DB puede estar
-            # stale por bug del feed IEX en get_stock_bars). Si latest_trade falla,
-            # caer al close de la última candle conocida.
+            # Para STOCKS: usar cache de precios (poblado en bg, no bloquea).
             # Para CRYPTO: el feed Binance es confiable → usar close de la DB directamente.
             if symbol in STOCK_SYMBOLS:
-                live_price = _fetch_stock_price_fallback(symbol)
+                live_price = _fetch_stock_price_fallback(symbol, allow_blocking=False)
                 price = live_price if live_price > 0 else (candle.close if candle else 0)
             else:
                 price = candle.close if candle else 0
