@@ -34,16 +34,17 @@ CRYPTO_SYMBOLS = [
 
 # Stocks de Alpaca — solo opera en horario de mercado (9:30-16:00 ET lun-vie)
 STOCK_SYMBOLS = [
+    # Big Tech / Mag 7
     "AAPL",
     "MSFT",
     "NVDA",
     "TSLA",
+    "GOOGL",
+    "AMZN",
+    "META",
+    # ETF
     "SPY",
-    # ⚠️ META/GOOGL/AMZN/AMD/QQQ/COIN/NU desactivados: reducción de memoria
-    # VM 512MB con 22 symbols sufría OOM kills repetidos. Reactivar con más RAM.
-    # "META",
-    # "GOOGL",
-    # "AMZN",
+    # ⚠️ AMD/QQQ/COIN/NU desactivados por memoria — reactivar si se sube a 1GB
     # "AMD",
     # "QQQ",
     # "COIN",
