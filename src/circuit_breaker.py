@@ -38,15 +38,47 @@ def _aware(dt: Optional[datetime]) -> Optional[datetime]:
 class CircuitBreaker:
     """Evalúa condiciones de riesgo y decide si pausar el bot.
 
+    El capital base se calcula DINÁMICAMENTE como la suma de:
+      - Binance USDT free + used (crypto trading capital)
+      - Alpaca USD cash + portfolio value (stocks trading capital)
+
+    Esto evita el falso-positivo donde un trade de stock (Alpaca) generaba
+    un drawdown % "enorme" cuando se medía solo contra el balance crypto.
+
     Uso:
-        breaker = CircuitBreaker(initial_capital=10_000)
+        breaker = CircuitBreaker()
         should_pause, reason = breaker.check()
-        if should_pause:
-            ...
     """
 
     def __init__(self, initial_capital: float = 10_000.0):
+        # Mantenido por compatibilidad — pero check() recalcula capital combinado
         self.initial_capital = initial_capital
+
+    def _combined_capital(self) -> float:
+        """Suma capital de Binance (USDT) + Alpaca (USD).
+        Si algún fetch falla, usa initial_capital como fallback conservador."""
+        total = 0.0
+        try:
+            from src import data_fetcher
+            b = data_fetcher.fetch_balance()
+            usdt = float(b.get("free", {}).get("USDT", 0) or 0) + \
+                   float(b.get("used", {}).get("USDT", 0) or 0)
+            total += usdt
+        except Exception as e:
+            logger.warning(f"[CB] Binance balance falló: {e}")
+
+        try:
+            from src import alpaca_fetcher
+            acc = alpaca_fetcher.trading_client.get_account()
+            # Usar equity (cash + posiciones marked-to-market) para el capital real
+            total += float(acc.equity or 0)
+        except Exception as e:
+            logger.warning(f"[CB] Alpaca balance falló: {e}")
+
+        # Fallback: si ambos fetches fallan o suman 0, usar capital inicial
+        if total <= 0:
+            return self.initial_capital
+        return total
 
     def check(self) -> tuple[bool, str]:
         """Evalúa todas las condiciones de pausa.
@@ -61,6 +93,9 @@ class CircuitBreaker:
             logger.warning(f"[CB] Error leyendo trades: {e}")
             return False, ""
 
+        # Capital base combinado (Binance USDT + Alpaca USD)
+        capital = self._combined_capital()
+
         # ── Condición 1: Drawdown diario ─────────────────────────────────────
         today_start = datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0)
@@ -69,22 +104,23 @@ class CircuitBreaker:
             if t.exit_time and _aware(t.exit_time) >= today_start
         ]
         daily_pnl = sum(t.pnl_usdt or 0 for t in today_trades)
-        daily_dd_pct = abs(daily_pnl) / self.initial_capital * 100 if daily_pnl < 0 else 0
+        daily_dd_pct = abs(daily_pnl) / capital * 100 if daily_pnl < 0 else 0
 
         if daily_dd_pct >= config.CB_DAILY_DRAWDOWN_PCT:
             reason = (f"Drawdown diario {daily_dd_pct:.1f}% ≥ "
-                      f"{config.CB_DAILY_DRAWDOWN_PCT}% (PnL hoy: {daily_pnl:+.2f} USDT)")
+                      f"{config.CB_DAILY_DRAWDOWN_PCT}% "
+                      f"(PnL hoy: {daily_pnl:+.2f} sobre capital combinado ${capital:,.0f})")
             logger.warning(f"[CB] 🚨 CONDICIÓN 1: {reason}")
             return True, reason
 
         # ── Condición 2: Pérdida total acumulada ────────────────────────────
         total_pnl    = sum(t.pnl_usdt or 0 for t in trades)
-        total_loss_pct = abs(total_pnl) / self.initial_capital * 100 if total_pnl < 0 else 0
+        total_loss_pct = abs(total_pnl) / capital * 100 if total_pnl < 0 else 0
 
         if total_loss_pct >= config.CB_TOTAL_LOSS_PCT:
             reason = (f"Pérdida total {total_loss_pct:.1f}% ≥ "
-                      f"{config.CB_TOTAL_LOSS_PCT}% del capital inicial "
-                      f"(PnL acumulado: {total_pnl:+.2f} USDT)")
+                      f"{config.CB_TOTAL_LOSS_PCT}% del capital "
+                      f"(PnL acumulado: {total_pnl:+.2f} sobre ${capital:,.0f})")
             logger.warning(f"[CB] 🚨 CONDICIÓN 2: {reason}")
             return True, reason
 
@@ -107,7 +143,7 @@ class CircuitBreaker:
             return True, reason
 
         logger.debug(
-            f"[CB] OK | DD diario={daily_dd_pct:.1f}% | "
+            f"[CB] OK | capital=${capital:,.0f} | DD diario={daily_dd_pct:.2f}% | "
             f"PnL total={total_pnl:+.2f} | streak={consecutive} pérdidas consec.")
         return False, ""
 
