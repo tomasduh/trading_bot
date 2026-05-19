@@ -50,26 +50,28 @@ def fetch_ohlcv(symbol: str, timeframe: str = "15m", limit: int = 200) -> pd.Dat
     tf = _TF_MAP.get(timeframe, TimeFrame(15, TimeFrameUnit.Minute))
     end = datetime.now(timezone.utc)
 
-    # ⚠️ BUG conocido de Alpaca: cuando pasas (start, end, limit) y limit < total
-    # de bars del rango, devuelve los PRIMEROS limit bars (los más viejos).
-    # Para obtener los más recientes hay que pedir TODOS los bars del rango
-    # (limit alto) y luego hacer tail(N) en cliente.
+    # ⚠️ BUG de Alpaca: cuando pasas (start, end, limit) y limit < total de bars
+    # del rango, devuelve los PRIMEROS limit bars (los más viejos).
+    # SOLUCIÓN: ajustar el RANGO `start` para que contenga aprox `limit` bars
+    # (con buffer). Así Alpaca devuelve todos los del rango y nosotros tail(limit).
     tf_minutes = {"1m": 1, "5m": 5, "15m": 15, "30m": 30,
                   "1h": 60, "4h": 240, "1d": 1440}.get(timeframe, 30)
-    # Cuántos días naturales necesitamos: limit velas × tf_min, asumiendo
-    # mercado abierto ~6.5h/día → factor 24/6.5 ≈ 3.7 + buffer fin de semana.
     market_minutes_needed = limit * tf_minutes
-    calendar_days_needed = max(7, int(market_minutes_needed / 60 / 6.5 * 2) + 3)
+    # Mercado abierto 6.5h/día = 1/3.7 del calendario. Factor 1.4 de buffer.
+    calendar_days_needed = max(5, int(market_minutes_needed / 60 / 6.5 * 1.4) + 2)
     start = end - timedelta(days=calendar_days_needed)
+
+    # limit ligeramente mayor a `limit` solicitado para asegurar que el rango
+    # corto contenga los velas necesarias después de filtrar pre-market.
+    # NO usar 10000: hace que Alpaca devuelva miles de bars y tarde 10-15s.
+    api_limit = min(limit * 3, 2000)
 
     req = StockBarsRequest(
         symbol_or_symbols=symbol,
         timeframe=tf,
         start=start,
         end=end,
-        # limit alto para asegurar que Alpaca devuelva TODOS los bars del rango
-        # (luego tail(limit) abajo selecciona los más recientes).
-        limit=10000,
+        limit=api_limit,
         feed=DataFeed.IEX,
     )
     bars = data_client.get_stock_bars(req)
