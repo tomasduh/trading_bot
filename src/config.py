@@ -120,7 +120,9 @@ LOG_DIR.mkdir(exist_ok=True)
 # Si el 4h está en tendencia bajista → BUY bloqueado aunque el 30m diga BUY.
 # VALIDADO POR BACKTEST: hybrid_C (con MTF on) dio -6.20% PnL vs -8.28% sin MTF
 # en 60d. El filtro macro reduce trades pero mejora PnL en bear markets.
-USE_MTF         = True         # ✅ ACTIVADO (Hybrid C)
+USE_MTF         = False        # ⚠️ TEMPORALMENTE OFF — la VM 512MB se saturaba
+                              # con 22 símbolos × 2 fetches (15m + 4h). Reactivar
+                              # cuando upgrademos memoria o reduzcamos símbolos.
 MTF_TIMEFRAME   = "4h"        # timeframe macro para confirmación de tendencia
 
 # ── Cap global de exposición (Fase 4.3) ───────────────────────────────────────
@@ -162,8 +164,6 @@ SLIPPAGE_PCT = 0.0005    # 0.05% estimado conservador por orden (ambos lados)
 HC_PING_URL = os.getenv("HC_PING_URL", "")
 
 # ── Loop ───────────────────────────────────────────────────────────────────────
-# Acelerado: timeframe=15m → ciclo=5min mantiene el ratio 1:3 (3 chequeos de
-# SL/TP por cada vela cerrada). SL/TP, circuit breaker y reconciliador reaccionan
-# 2× más rápido que con la config anterior (10min/30m=1:3 → 5min/15m=1:3 igual
-# ratio, pero menor latencia absoluta).
-LOOP_INTERVAL_SECONDS = 60 * 5  # cada 5 minutos
+# Subimos a 10min para reducir presión CPU/memoria en la VM 512MB.
+# 22 símbolos × indicadores en pandas saturaban el shared-cpu-1x.
+LOOP_INTERVAL_SECONDS = 60 * 10  # cada 10 minutos

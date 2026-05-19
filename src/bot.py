@@ -309,11 +309,9 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
         logger.warning(f"  [{symbol}] Error temporal de datos: {e}")
     except Exception as e:
         logger.error(f"  [{symbol}] Error inesperado: {e}", exc_info=True)
-    finally:
-        # Liberar memoria: forzar GC para liberar DataFrames pandas.
-        # Sin esto, los df de cada símbolo se acumulan hasta el próximo ciclo de GC
-        # (~100MB extra en RSS con 22 símbolos × MTF activado).
-        gc.collect()
+    # Nota: el gc.collect() global está en run_cycle (cada N símbolos),
+    # no aquí por símbolo. gc.collect() es caro (~100-500ms) y ejecutarlo
+    # 22 veces por ciclo agregaba 2-10s de overhead.
 
 
 def _ping_watchdog():
@@ -377,6 +375,11 @@ def run_cycle(executor: TradeExecutor, initial_capital: float = 10_000.0):
 
     # ── Watchdog ping ─────────────────────────────────────────────────────────
     _ping_watchdog()
+
+    # GC al final del ciclo — libera todos los DataFrames pandas acumulados
+    # durante el procesamiento de los 22 símbolos (sin esto la memoria crece
+    # hasta saturar la VM 512MB).
+    gc.collect()
 
 
 def main():
