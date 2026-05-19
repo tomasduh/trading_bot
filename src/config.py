@@ -62,8 +62,11 @@ SYMBOL  = CRYPTO_SYMBOLS[0]
 # Backtest comparativo: hybrid_C dio -6.20% PnL en 60d (vs -3.59% conservative
 # y -11.52% acelerada agresiva). 19% más trades que conservative, 7.36% max DD.
 TIMEFRAME    = "15m"
-# 400 velas × 15m = 100h de mercado; suficiente para EMA200 (warmup 50 con EMA_TREND_SLOW=50)
-CANDLES_LIMIT = 400
+# 200 velas × 15m = 50h de mercado. Suficiente para todos los indicadores:
+# - EMA_TREND_SLOW=50 → warmup 50, quedan 150 velas usables
+# - RSI 14, MACD 26, BB 20, ADX 14, ATR 14 → todos OK
+# Reducido de 400→200 para bajar memoria (era ~237MB RSS → 512MB OOM)
+CANDLES_LIMIT = 200
 
 # ── Indicadores ───────────────────────────────────────────────────────────────
 EMA_FAST = 9

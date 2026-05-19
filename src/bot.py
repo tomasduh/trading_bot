@@ -2,6 +2,7 @@
 Loop principal del bot con kill-switch, pause/resume y manejo robusto de errores.
 Ejecutar con: python -m src.bot
 """
+import gc
 import time
 import logging
 from pathlib import Path
@@ -219,6 +220,7 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
 
         # 2. Evaluar señal — multi-timeframe si está habilitado
         if config.USE_MTF:
+            df_macro = None
             try:
                 df_macro = fetcher.fetch_ohlcv(
                     symbol, timeframe=config.MTF_TIMEFRAME) \
@@ -228,6 +230,10 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
             except Exception as e:
                 logger.warning(f"  {symbol:<{width}} MTF fetch falló ({e}) — usando solo 30m")
                 signal = strategy.evaluate(df_ind)
+            finally:
+                # Liberar memoria: df_macro puede ser un DataFrame grande (200+ velas)
+                if df_macro is not None:
+                    del df_macro
         else:
             signal = strategy.evaluate(df_ind)
 
@@ -303,6 +309,11 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
         logger.warning(f"  [{symbol}] Error temporal de datos: {e}")
     except Exception as e:
         logger.error(f"  [{symbol}] Error inesperado: {e}", exc_info=True)
+    finally:
+        # Liberar memoria: forzar GC para liberar DataFrames pandas.
+        # Sin esto, los df de cada símbolo se acumulan hasta el próximo ciclo de GC
+        # (~100MB extra en RSS con 22 símbolos × MTF activado).
+        gc.collect()
 
 
 def _ping_watchdog():

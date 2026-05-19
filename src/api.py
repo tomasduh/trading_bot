@@ -273,24 +273,44 @@ async def websocket_endpoint(ws: WebSocket, token: str | None = None):
         return
 
     await manager.connect(ws)
+    logger.info("WS connect accepted, building initial data...")
     try:
-        # Los builders hacen IO síncrono (DB + Alpaca API). Los ejecutamos en
-        # thread pool para no bloquear el event loop durante la conexión inicial
-        # (antes esto causaba freezes de ~7s al conectar el WS).
-        status   = await asyncio.to_thread(_build_status)
-        signals  = await asyncio.to_thread(_build_signals)
-        trades   = await asyncio.to_thread(_build_trades)
-        log_data = await asyncio.to_thread(_build_log, 40)
+        # Ejecutar los 4 builders EN PARALELO (gather) en lugar de uno tras otro.
+        # Antes: 4 awaits secuenciales = suma de tiempos.
+        # Ahora: max(tiempos) — limita por el más lento.
+        t0 = asyncio.get_event_loop().time()
+        status, signals, trades, log_data = await asyncio.gather(
+            asyncio.to_thread(_build_status),
+            asyncio.to_thread(_build_signals),
+            asyncio.to_thread(_build_trades),
+            asyncio.to_thread(_build_log, 40),
+            return_exceptions=True,
+        )
+        dt = asyncio.get_event_loop().time() - t0
+        logger.info("WS builders done in %.2fs", dt)
+
+        # Si algún builder lanzó excepción, log y enviar valor por defecto
+        if isinstance(status, Exception):
+            logger.warning("_build_status falló: %s", status); status = {}
+        if isinstance(signals, Exception):
+            logger.warning("_build_signals falló: %s", signals); signals = []
+        if isinstance(trades, Exception):
+            logger.warning("_build_trades falló: %s", trades); trades = []
+        if isinstance(log_data, Exception):
+            logger.warning("_build_log falló: %s", log_data); log_data = []
+
         await ws.send_json({"type": "status",  "data": status})
         await ws.send_json({"type": "signals", "data": signals})
         await ws.send_json({"type": "trades",  "data": trades})
         await ws.send_json({"type": "log",     "lines": log_data})
+        logger.info("WS initial data sent OK")
+
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(ws)
     except Exception as e:
-        logger.warning("WS endpoint error: %s", e)
+        logger.warning("WS endpoint error: %s", e, exc_info=True)
         manager.disconnect(ws)
 
 
