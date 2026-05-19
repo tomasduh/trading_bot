@@ -23,33 +23,31 @@ CRYPTO_SYMBOLS = [
     "SOL/USDT",
     "BNB/USDT",
     "XRP/USDT",
-    # Agregados (Sprint hybrid_C): más volumen sin sacrificar calidad
-    "ADA/USDT",
-    "DOT/USDT",
-    "AVAX/USDT",
-    "LINK/USDT",
-    "POL/USDT",   # Polygon — antes era MATIC, rebrand 2024
+    # ⚠️ ADA/DOT/AVAX/LINK/POL desactivados: 22 symbols saturaba la VM 512MB
+    # (OOM kill repetidos). Reactivar cuando se upgradee a 1GB o se optimice más.
+    # "ADA/USDT",
+    # "DOT/USDT",
+    # "AVAX/USDT",
+    # "LINK/USDT",
+    # "POL/USDT",
 ]
 
 # Stocks de Alpaca — solo opera en horario de mercado (9:30-16:00 ET lun-vie)
 STOCK_SYMBOLS = [
-    # Big Tech (Mag 7)
     "AAPL",
     "MSFT",
-    "META",
     "NVDA",
     "TSLA",
-    "GOOGL",   # nuevo — Mag 7 que faltaba
-    "AMZN",    # nuevo — Mag 7 que faltaba
-    # Semis
-    "AMD",     # nuevo — alternativa a NVDA (no 100% correlacionado)
-    # ETFs
     "SPY",
-    "QQQ",     # nuevo — ETF tech (complemento a SPY)
-    # Crypto-correlated
-    "COIN",    # nuevo — Coinbase, correlacionado con cripto
-    # Otros
-    "NU",
+    # ⚠️ META/GOOGL/AMZN/AMD/QQQ/COIN/NU desactivados: reducción de memoria
+    # VM 512MB con 22 symbols sufría OOM kills repetidos. Reactivar con más RAM.
+    # "META",
+    # "GOOGL",
+    # "AMZN",
+    # "AMD",
+    # "QQQ",
+    # "COIN",
+    # "NU",
 ]
 
 SYMBOLS = CRYPTO_SYMBOLS  # legacy
@@ -66,7 +64,7 @@ TIMEFRAME    = "15m"
 # - EMA_TREND_SLOW=50 → warmup 50, quedan 150 velas usables
 # - RSI 14, MACD 26, BB 20, ADX 14, ATR 14 → todos OK
 # Reducido de 400→200 para bajar memoria (era ~237MB RSS → 512MB OOM)
-CANDLES_LIMIT = 200
+CANDLES_LIMIT = 100   # reducido 200→100 para aliviar memoria VM 512MB
 
 # ── Indicadores ───────────────────────────────────────────────────────────────
 EMA_FAST = 9
@@ -164,6 +162,6 @@ SLIPPAGE_PCT = 0.0005    # 0.05% estimado conservador por orden (ambos lados)
 HC_PING_URL = os.getenv("HC_PING_URL", "")
 
 # ── Loop ───────────────────────────────────────────────────────────────────────
-# Subimos a 10min para reducir presión CPU/memoria en la VM 512MB.
-# 22 símbolos × indicadores en pandas saturaban el shared-cpu-1x.
+# 10 símbolos × CANDLES_LIMIT=100 es mucho más ligero que los 22×200 anteriores.
+# Mantenemos 10min para darle holgura de CPU. Con más RAM podríamos bajar a 5min.
 LOOP_INTERVAL_SECONDS = 60 * 10  # cada 10 minutos
