@@ -378,7 +378,10 @@ def run_cycle(executor: TradeExecutor, initial_capital: float = 10_000.0):
     gc.collect()
 
 
-def main():
+def run_bot_forever():
+    """Loop principal del bot. Diseñado para correr en un thread separado
+    (asyncio.to_thread) dentro del proceso de uvicorn, eliminando el segundo
+    proceso Python que saturaba la VM 512MB."""
     logger.info("=" * 55)
     logger.info(f"Bot iniciando — modo: {config.TRADING_MODE.upper()}")
     logger.info(f"Crypto: {', '.join(config.CRYPTO_SYMBOLS)}")
@@ -392,7 +395,6 @@ def main():
     consecutive_fatal = 0
 
     # Capital inicial para el circuit breaker (crypto USDT + stocks USD)
-    # Estimamos sumando ambos balances; si falla usamos el default 10K.
     try:
         _cb_capital = float(data_fetcher.fetch_balance().get("free", {}).get("USDT", 10_000))
     except Exception:
@@ -402,7 +404,7 @@ def main():
     while True:
         try:
             run_cycle(executor, initial_capital=_cb_capital)
-            consecutive_fatal = 0  # reset al completar un ciclo OK
+            consecutive_fatal = 0
         except KeyboardInterrupt:
             logger.info("Bot detenido por el usuario.")
             break
@@ -419,6 +421,11 @@ def main():
 
         logger.info(f"Esperando {config.LOOP_INTERVAL_SECONDS // 60} min...\n")
         time.sleep(config.LOOP_INTERVAL_SECONDS)
+
+
+def main():
+    """Punto de entrada para ejecución directa (CLI / desarrollo local)."""
+    run_bot_forever()
 
 
 if __name__ == "__main__":

@@ -31,12 +31,32 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Arranca las tareas de background al iniciar la app (reemplaza @on_event)."""
+    """Arranca las tareas de background al iniciar la app (reemplaza @on_event).
+
+    El bot corre como asyncio.to_thread dentro de este proceso (no como proceso
+    separado) para ahorrar ~150-200MB de RAM: pandas/numpy/ccxt/sqlalchemy se
+    cargan una sola vez en lugar de dos veces.
+    """
     asyncio.create_task(watch_log())
     asyncio.create_task(watch_data())
     asyncio.create_task(push_heartbeat())
     asyncio.create_task(refresh_prices_loop())  # popula cache de stocks en bg
+    asyncio.create_task(_run_bot_in_thread())    # bot loop — mismo proceso
     yield
+
+
+async def _run_bot_in_thread():
+    """Ejecuta el bot loop en un thread separado para no bloquear el event loop.
+    El bot usa time.sleep() y llama APIs síncronas → debe correr en thread.
+    Al correr en el mismo proceso que uvicorn ahorramos ~150MB de RAM porque
+    pandas/numpy/ccxt/sqlalchemy se cargan una sola vez."""
+    _log = logging.getLogger("api.bot_launcher")
+    _log.info("Lanzando bot loop en thread pool (single-process mode)...")
+    try:
+        from src.bot import run_bot_forever
+        await asyncio.to_thread(run_bot_forever)
+    except Exception as e:
+        _log.critical("Bot loop terminó con error: %s", e, exc_info=True)
 
 
 async def refresh_prices_loop():
