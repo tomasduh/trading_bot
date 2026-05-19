@@ -181,8 +181,9 @@ async def watch_data():
             cycles = analyst.load_cycles()
             if len(cycles) != last_cycle_count:
                 last_cycle_count = len(cycles)
-                signals = _build_signals()
-                status  = _build_status()
+                # to_thread evita bloquear el event loop (12+ Alpaca API calls)
+                signals = await asyncio.to_thread(_build_signals)
+                status  = await asyncio.to_thread(_build_status)
                 await manager.broadcast({"type": "signals", "data": signals})
                 await manager.broadcast({"type": "status",  "data": status})
 
@@ -190,7 +191,7 @@ async def watch_data():
                 trade_count = s.query(Trade).count()
             if trade_count != last_trade_count:
                 last_trade_count = trade_count
-                trades = _build_trades()
+                trades = await asyncio.to_thread(_build_trades)
                 await manager.broadcast({"type": "trades", "data": trades})
 
             consecutive_errors = 0
@@ -214,13 +215,15 @@ async def push_heartbeat():
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "paused": PAUSE_FILE.exists(),
             })
-            # Cada 30s (3 iter) push status si hay open trades — refresca MTM
+            # Cada 30s (3 iter) push status si hay open trades — refresca MTM.
+            # Ejecutamos _build_status() en thread pool para no bloquear el
+            # event loop (hace llamadas síncronas a DB + Alpaca).
             if iter_count % 3 == 0:
                 try:
                     with get_session() as s:
                         has_open = s.query(Trade).filter(Trade.status == "OPEN").count() > 0
                     if has_open:
-                        status = _build_status()
+                        status = await asyncio.to_thread(_build_status)
                         await manager.broadcast({"type": "status", "data": status})
                 except Exception as e:
                     logger.warning("status refresh error: %s", e)
@@ -252,10 +255,17 @@ async def websocket_endpoint(ws: WebSocket, token: str | None = None):
 
     await manager.connect(ws)
     try:
-        await ws.send_json({"type": "status",  "data": _build_status()})
-        await ws.send_json({"type": "signals", "data": _build_signals()})
-        await ws.send_json({"type": "trades",  "data": _build_trades()})
-        await ws.send_json({"type": "log",     "lines": _build_log(40)})
+        # Los builders hacen IO síncrono (DB + Alpaca API). Los ejecutamos en
+        # thread pool para no bloquear el event loop durante la conexión inicial
+        # (antes esto causaba freezes de ~7s al conectar el WS).
+        status   = await asyncio.to_thread(_build_status)
+        signals  = await asyncio.to_thread(_build_signals)
+        trades   = await asyncio.to_thread(_build_trades)
+        log_data = await asyncio.to_thread(_build_log, 40)
+        await ws.send_json({"type": "status",  "data": status})
+        await ws.send_json({"type": "signals", "data": signals})
+        await ws.send_json({"type": "trades",  "data": trades})
+        await ws.send_json({"type": "log",     "lines": log_data})
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
@@ -323,26 +333,42 @@ def _last_known_price(session, symbol: str) -> float | None:
     return candle.close if candle else None
 
 
+# Cache de precios live por símbolo: {symbol: (price, expires_at_ts)}
+# Evita llamadas redundantes a Alpaca dentro de la ventana TTL.
+_price_cache: dict[str, tuple[float, float]] = {}
+_PRICE_CACHE_TTL_SECONDS = 20   # refresh cada 20s (heartbeat es cada 10s)
+
+
 def _fetch_stock_price_fallback(symbol: str) -> float:
     """Obtiene el último precio REAL de un stock vía Alpaca get_stock_latest_trade.
 
-    Este endpoint SÍ funciona en tiempo real con feed IEX gratis (a diferencia
-    de get_stock_bars que devuelve data stale). Se usa como fallback cuando
-    la DB tiene una candle vieja por el bug del feed.
+    Cacheado con TTL 20s para evitar llamadas redundantes — al construir
+    _build_signals() necesitamos 12 precios (uno por stock); sin cache eso
+    eran 12 llamadas síncronas a Alpaca = ~7s de bloqueo del event loop
+    al conectar el WebSocket o ante cada heartbeat.
     """
+    import time
+    now = time.time()
+    cached = _price_cache.get(symbol)
+    if cached and cached[1] > now:
+        return cached[0]
+
+    price = 0.0
     try:
         from src import alpaca_fetcher
-        # Preferir el endpoint en tiempo real
         live = alpaca_fetcher.get_latest_trade_price(symbol)
         if live and live > 0:
-            return live
-        # Fallback al daily si latest_trade falla
-        df = alpaca_fetcher.fetch_ohlcv(symbol, timeframe="1d", limit=1)
-        if not df.empty:
-            return float(df["close"].iloc[-1])
+            price = live
+        else:
+            df = alpaca_fetcher.fetch_ohlcv(symbol, timeframe="1d", limit=1)
+            if not df.empty:
+                price = float(df["close"].iloc[-1])
     except Exception:
         pass
-    return 0.0
+
+    if price > 0:
+        _price_cache[symbol] = (price, now + _PRICE_CACHE_TTL_SECONDS)
+    return price
 
 
 def _build_signals() -> list:
