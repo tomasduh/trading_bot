@@ -193,9 +193,11 @@ class TradeExecutor:
         # Refrescar la referencia tras update
         trade = self._open_trades.get(symbol)
 
-        if risk_manager.check_stop_loss(trade.entry_price, current_price):
+        sl = trade.stop_loss or risk_manager.stop_loss_price(trade.entry_price, symbol)
+        tp = trade.take_profit or risk_manager.take_profit_price(trade.entry_price, symbol)
+        if current_price <= sl:
             return "STOP_LOSS"
-        if risk_manager.check_take_profit(trade.entry_price, current_price):
+        if current_price >= tp:
             return "TAKE_PROFIT"
         if risk_manager.check_trailing_stop(trade.entry_price,
                                              trade.highest_price or trade.entry_price,
