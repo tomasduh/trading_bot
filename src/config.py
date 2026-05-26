@@ -119,9 +119,9 @@ LOG_DIR.mkdir(exist_ok=True)
 # Si el 4h está en tendencia bajista → BUY bloqueado aunque el 30m diga BUY.
 # VALIDADO POR BACKTEST: hybrid_C (con MTF on) dio -6.20% PnL vs -8.28% sin MTF
 # en 60d. El filtro macro reduce trades pero mejora PnL en bear markets.
-USE_MTF         = False        # ⚠️ TEMPORALMENTE OFF — la VM 512MB se saturaba
-                              # con 22 símbolos × 2 fetches (15m + 4h). Reactivar
-                              # cuando upgrademos memoria o reduzcamos símbolos.
+USE_MTF         = True         # ON — con 5 cryptos (vs 22 anteriores) la VM aguanta.
+                              # Backtest 30d muestra +0.01% PnL (unico config positivo)
+                              # vs -3.66% sin MTF. Activado 2026-05-26.
 MTF_TIMEFRAME   = "4h"        # timeframe macro para confirmación de tendencia
 
 # ── Cap global de exposición (Fase 4.3) ───────────────────────────────────────
