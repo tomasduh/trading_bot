@@ -172,7 +172,10 @@ def evaluate(df: pd.DataFrame) -> Signal:
 
     # ── Decisión con filtro de tendencia ─────────────────────────────────────
     if len(buy_conditions) >= threshold:
-        if config.USE_TREND_FILTER and trend != "up":
+        # Permitir BUY en tendencia "up" o "neutral". Solo bloquear si tendencia es
+        # explícitamente "down" (EMA21 < EMA50 con ADX > 20 = bajista confirmado).
+        # Antes era trend != "up", lo que bloqueaba mercados laterales (neutral) innecesariamente.
+        if config.USE_TREND_FILTER and trend == "down":
             return Signal("NONE",
                 f"BUY bloqueado por filtro de tendencia (trend={trend}, adx={adx:.1f}) | activas: {', '.join(buy_conditions)}",
                 price, rsi, ema_fast, ema_slow, macd_hist, 0,

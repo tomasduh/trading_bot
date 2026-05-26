@@ -65,7 +65,7 @@ TIMEFRAME    = "15m"
 # - EMA_TREND_SLOW=50 → warmup 50, quedan 150 velas usables
 # - RSI 14, MACD 26, BB 20, ADX 14, ATR 14 → todos OK
 # Reducido de 400→200 para bajar memoria (era ~237MB RSS → 512MB OOM)
-CANDLES_LIMIT = 100   # reducido 200→100 para aliviar memoria VM 512MB
+CANDLES_LIMIT = 80    # reducido 200→100→80 para aliviar memoria VM 512MB
 
 # ── Indicadores ───────────────────────────────────────────────────────────────
 EMA_FAST = 9
@@ -88,7 +88,7 @@ ADX_THRESHOLD = 20     # ADX > 20 indica tendencia con fuerza
 # ── Estrategia ────────────────────────────────────────────────────────────────
 # Hybrid C: score=2 mantiene la calidad de señal (mejor WR que score=1).
 # El backtest mostró que score=1 deteriora WR significativamente (18% vs 27%).
-MIN_SIGNAL_SCORE = 2          # mínimo de condiciones para disparar señal
+MIN_SIGNAL_SCORE = 1          # mínimo de condiciones para disparar señal (era 2, bajado para generar más BUYs)
 USE_TREND_FILTER = True       # solo BUY en tendencia alcista, SELL en bajista
 DISABLE_SIGNAL_EXIT = False   # si True: solo cierra por SL/TP/Trailing, no por SELL signal
 SIGNAL_EXIT_ONLY_IN_LOSS = True  # si True: SELL signal solo cierra si el trade está en pérdida real

@@ -178,7 +178,8 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
     """
     width = 12 if label == "CRYPTO" else 6
     try:
-        df = fetcher.fetch_ohlcv(symbol, timeframe=config.TIMEFRAME) \
+        # BUG FIX: pasar limit explícito a Alpaca (su default era 200, ignorando config.CANDLES_LIMIT)
+        df = fetcher.fetch_ohlcv(symbol, timeframe=config.TIMEFRAME, limit=config.CANDLES_LIMIT) \
             if label == "STOCK" else fetcher.fetch_ohlcv(symbol=symbol)
         if df.empty or len(df) < 30:
             logger.warning(f"  {symbol:<{width}} sin suficientes datos")
@@ -356,6 +357,7 @@ def run_cycle(executor: TradeExecutor, initial_capital: float = 10_000.0):
             process_market(symbol, executor, usdt_free, data_fetcher, "CRYPTO")
     except DataFetchError as e:
         logger.warning(f"[CRYPTO] No se pudo obtener balance: {e}")
+    gc.collect()   # liberar DataFrames de crypto antes de procesar stocks
 
     # ── Stocks ───────────────────────────────────────────────────────────────
     try:
