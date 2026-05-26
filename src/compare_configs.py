@@ -108,7 +108,10 @@ def _run_backtest(symbol: str, days: int, capital: float = 10_000.0,
     except Exception as e:
         return {"symbol": symbol, "error": f"fetch {tf} falló: {e}"}
 
-    if df.empty or len(df) < 250:
+    # Stocks operan 6.5h/dia vs 24h crypto — menos velas por dia. Con 30d+ de historia
+    # y 15m TF, stocks dan ~570 velas (suficiente). Umbral conservador: 80 velas.
+    min_candles = 80 if "/" not in symbol else 250
+    if df.empty or len(df) < min_candles:
         return {"symbol": symbol, "error": f"datos insuficientes ({len(df)})"}
 
     # Si MTF: cargar también 4h
@@ -284,8 +287,9 @@ def print_table(results: dict, symbols: list[str]):
 
 def main():
     parser = argparse.ArgumentParser()
+    _all_symbols = list(config.CRYPTO_SYMBOLS) + list(config.STOCK_SYMBOLS)
     parser.add_argument("--days", type=int, default=60)
-    parser.add_argument("--symbols", default=",".join(config.CRYPTO_SYMBOLS))
+    parser.add_argument("--symbols", default=",".join(_all_symbols))
     parser.add_argument("--capital", type=float, default=10_000.0)
     args = parser.parse_args()
 
