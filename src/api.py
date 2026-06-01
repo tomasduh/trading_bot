@@ -228,17 +228,56 @@ async def watch_log():
             await asyncio.sleep(5)
 
 
+def _cycles_file_size() -> int:
+    """Retorna el tamaño en bytes del archivo cycles.jsonl (0 si no existe).
+    Mucho más barato que load_cycles() — solo stat() del filesystem."""
+    try:
+        return analyst.CYCLES_LOG.stat().st_size
+    except OSError:
+        return 0
+
+
+def _count_cycles_cheap() -> tuple[int, str | None]:
+    """Cuenta líneas y lee el último ts de cycles.jsonl sin cargar todo en RAM.
+    Lee el archivo de atrás hacia adelante (máx 512 bytes) para el último ts,
+    y cuenta líneas con un buffer pequeño. O(n) en líneas pero O(1) en RAM."""
+    if not analyst.CYCLES_LOG.exists():
+        return 0, None
+    count = 0
+    last_ts = None
+    try:
+        with open(analyst.CYCLES_LOG, "rb") as f:
+            # Contar líneas con buffer de 64KB (evita cargar 8MB+ en RAM)
+            buf_size = 65536
+            buf = f.read(buf_size)
+            while buf:
+                count += buf.count(b"\n")
+                buf = f.read(buf_size)
+            # Leer último ts: buscar la última línea no vacía
+            f.seek(0, 2)
+            fsize = f.tell()
+            tail = min(512, fsize)
+            f.seek(fsize - tail)
+            last_bytes = f.read(tail).decode("utf-8", errors="ignore")
+            last_line = next((l for l in reversed(last_bytes.splitlines()) if l.strip()), None)
+            if last_line:
+                last_ts = json.loads(last_line).get("ts")
+    except Exception:
+        pass
+    return count, last_ts
+
+
 async def watch_data():
     """Cada 5s actualiza estado, señales, trades."""
-    last_cycle_count = 0
+    last_cycle_size = 0
     last_trade_count = 0
     consecutive_errors = 0
     while True:
         await asyncio.sleep(5)
         try:
-            cycles = analyst.load_cycles()
-            if len(cycles) != last_cycle_count:
-                last_cycle_count = len(cycles)
+            cycle_size = _cycles_file_size()
+            if cycle_size != last_cycle_size:
+                last_cycle_size = cycle_size
                 # to_thread evita bloquear el event loop (12+ Alpaca API calls)
                 signals = await asyncio.to_thread(_build_signals)
                 status  = await asyncio.to_thread(_build_status)
@@ -400,7 +439,8 @@ def _build_status() -> dict:
                 "mtm_pnl_pct":  round(mtm_pct * 100, 3),
             })
 
-    cycles = analyst.load_cycles()
+    # Contar ciclos y obtener el último ts sin cargar el archivo completo
+    cycle_count, last_cycle_ts = _count_cycles_cheap()
     return {
         "total_trades":     len(closed),
         "open_trades":      open_list,
@@ -408,8 +448,8 @@ def _build_status() -> dict:
         "losses":           len(closed) - wins,
         "win_rate":         round(wins / len(closed) * 100, 1) if closed else 0,
         "total_pnl_usdt":   round(pnl_sum, 2),
-        "total_cycles":     len(cycles),
-        "last_cycle":       cycles[-1]["ts"] if cycles else None,
+        "total_cycles":     cycle_count,
+        "last_cycle":       last_cycle_ts,
         "crypto_symbols":   CRYPTO_SYMBOLS,
         "stock_symbols":    STOCK_SYMBOLS,
         "timeframe":        TIMEFRAME,
