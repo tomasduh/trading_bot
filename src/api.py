@@ -8,6 +8,8 @@ import csv
 import json
 import logging
 import asyncio
+import socket
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime, timezone
@@ -22,11 +24,16 @@ from slowapi.errors import RateLimitExceeded
 from src.config import BASE_DIR, CRYPTO_SYMBOLS, STOCK_SYMBOLS, TIMEFRAME, LOOP_INTERVAL_SECONDS
 from src.database import get_session, Trade, Signal as DbSignal, Candle
 from src import analyst, ml_analyst
+from src.bot import run_bot_forever  # importar aquí para que ccxt/Alpaca se inicialicen antes del lifespan
 
 logger = logging.getLogger("api")
 
 # ── Rate limiting ─────────────────────────────────────────────────────────────
 limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+
+# Executor dedicado para price refresh — 1 thread máximo para que los threads
+# zombie de Alpaca no saturen el thread pool compartido del event loop.
+_price_refresh_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="price-refresh")
 
 
 @asynccontextmanager
@@ -53,7 +60,6 @@ async def _run_bot_in_thread():
     _log = logging.getLogger("api.bot_launcher")
     _log.info("Lanzando bot loop en thread pool (single-process mode)...")
     try:
-        from src.bot import run_bot_forever
         await asyncio.to_thread(run_bot_forever)
     except Exception as e:
         _log.critical("Bot loop terminó con error: %s", e, exc_info=True)
@@ -62,20 +68,33 @@ async def _run_bot_in_thread():
 async def refresh_prices_loop():
     """Refresca el cache de precios de stocks cada 30s en background.
     No bloquea el event loop (corre en thread pool). Permite que las
-    requests al WS/REST sean instantáneas usando el cache."""
+    requests al WS/REST sean instantáneas usando el cache.
+    Usa backoff exponencial (hasta 10 min) cuando Alpaca falla repetidamente."""
     # Llenar el cache inmediatamente al arrancar
     try:
-        await asyncio.to_thread(_refresh_price_cache_sync)
+        loop = asyncio.get_event_loop()
+        await asyncio.wait_for(loop.run_in_executor(_price_refresh_executor, _refresh_price_cache_sync), timeout=15.0)
         logger.info("Stock price cache initialized (%d symbols)", len(_price_cache))
     except Exception as e:
         logger.warning("Initial price cache refresh failed: %s", e)
 
+    consecutive_failures = 0
     while True:
-        await asyncio.sleep(30)
+        # Backoff: 30s → 60s → 120s → 240s → cap 600s
+        delay = min(30 * (2 ** consecutive_failures), 600)
+        await asyncio.sleep(delay)
         try:
-            await asyncio.to_thread(_refresh_price_cache_sync)
+            loop = asyncio.get_event_loop()
+            await asyncio.wait_for(loop.run_in_executor(_price_refresh_executor, _refresh_price_cache_sync), timeout=15.0)
+            if consecutive_failures > 0:
+                logger.info("price refresh OK — resetting backoff")
+            consecutive_failures = 0
+        except asyncio.TimeoutError:
+            consecutive_failures += 1
+            logger.warning("price refresh timed out (>15s) — backoff %ds", min(30 * (2 ** consecutive_failures), 600))
         except Exception as e:
-            logger.warning("price refresh loop error: %s", e)
+            consecutive_failures += 1
+            logger.warning("price refresh loop error (backoff %ds): %s", min(30 * (2 ** consecutive_failures), 600), e)
 
 
 app = FastAPI(title="Trading Bot Dashboard", lifespan=lifespan)
@@ -325,8 +344,22 @@ async def websocket_endpoint(ws: WebSocket, token: str | None = None):
         await ws.send_json({"type": "log",     "lines": log_data})
         logger.info("WS initial data sent OK")
 
+        # Receive loop con timeout activo. Si el cliente no manda nada en
+        # WS_RECEIVE_TIMEOUT segundos, enviamos un ping de aplicación para
+        # verificar que la conexión sigue viva y evitar que el proxy de
+        # Fly.io la mate por idle. Si el send falla, la conexión está muerta.
+        WS_RECEIVE_TIMEOUT = 25  # segundos — por debajo del idle timeout de Fly.io (60s)
         while True:
-            await ws.receive_text()
+            try:
+                msg = await asyncio.wait_for(ws.receive_text(), timeout=WS_RECEIVE_TIMEOUT)
+                if msg == "ping":
+                    await ws.send_text("pong")
+            except asyncio.TimeoutError:
+                try:
+                    await ws.send_json({"type": "ping", "ts": datetime.now(timezone.utc).isoformat()})
+                except Exception:
+                    manager.disconnect(ws)
+                    break
     except WebSocketDisconnect:
         manager.disconnect(ws)
     except Exception as e:
@@ -435,18 +468,30 @@ def _fetch_stock_price_fallback(symbol: str, allow_blocking: bool = False) -> fl
 
 def _refresh_price_cache_sync():
     """Refresca el cache de precios para todos los stocks en background.
-    Se llama desde un task async vía to_thread — toma ~2-5s pero no bloquea
-    el event loop principal."""
+    Usa una sola llamada batch (todos los símbolos a la vez) para evitar
+    que conexiones colgadas saturen el thread pool."""
     import time
     from src import alpaca_fetcher
+    from alpaca.data.requests import StockLatestTradeRequest
     now = time.time()
-    for symbol in STOCK_SYMBOLS:
-        try:
-            live = alpaca_fetcher.get_latest_trade_price(symbol)
-            if live and live > 0:
-                _price_cache[symbol] = (live, now + _PRICE_CACHE_TTL_SECONDS)
-        except Exception as e:
-            logger.debug("refresh price %s: %s", symbol, e)
+    if not STOCK_SYMBOLS:
+        return
+    # Socket-level timeout: garantiza que el thread termine aunque Alpaca cuelgue.
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(12.0)
+    try:
+        req = StockLatestTradeRequest(symbol_or_symbols=STOCK_SYMBOLS)
+        result = alpaca_fetcher.data_client.get_stock_latest_trade(req)
+        for symbol in STOCK_SYMBOLS:
+            if symbol in result:
+                price = float(result[symbol].price)
+                if price > 0:
+                    _price_cache[symbol] = (price, now + _PRICE_CACHE_TTL_SECONDS)
+        logger.debug("batch price refresh OK: %d symbols", len(result))
+    except Exception as e:
+        logger.warning("batch price refresh failed: %s", e)
+    finally:
+        socket.setdefaulttimeout(old_timeout)
 
 
 def _build_signals() -> list:
