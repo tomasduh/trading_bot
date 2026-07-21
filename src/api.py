@@ -101,10 +101,10 @@ app = FastAPI(title="Trading Bot Dashboard", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-STATIC_DIR = BASE_DIR / "static"
-LOG_FILE   = BASE_DIR / "logs" / "bot.log"
-PAUSE_FILE = BASE_DIR / "data" / ".paused"
-CB_RESUME_FILE = BASE_DIR / "data" / ".cb_resumed_at"
+STATIC_DIR      = BASE_DIR / "static"
+LOG_FILE        = BASE_DIR / "logs" / "bot.log"
+PAUSE_FILE      = BASE_DIR / "data" / ".paused"
+CB_RESUME_FILE  = BASE_DIR / "data" / ".cb_resumed_at"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # ── Auth (obligatoria vía DASHBOARD_TOKEN env var) ────────────────────────────
@@ -255,9 +255,11 @@ def _count_cycles_cheap() -> tuple[int, str | None]:
                 count += buf.count(b"\n")
                 buf = f.read(buf_size)
             # Leer último ts: buscar la última línea no vacía
+            # Buffer generoso — las líneas de ciclo (con snapshot de indicadores)
+            # rondan 500-600 bytes; 512 las cortaba a la mitad y rompía el parseo.
             f.seek(0, 2)
             fsize = f.tell()
-            tail = min(512, fsize)
+            tail = min(8192, fsize)
             f.seek(fsize - tail)
             last_bytes = f.read(tail).decode("utf-8", errors="ignore")
             last_line = next((l for l in reversed(last_bytes.splitlines()) if l.strip()), None)
