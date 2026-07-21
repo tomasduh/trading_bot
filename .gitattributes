@@ -1,0 +1,5 @@
+# Los scripts shell DEBEN tener line endings LF: si se construye la imagen
+# Docker desde un checkout Windows con CRLF, el shebang queda "#!/bin/bash\r"
+# y el contenedor crashea con "/start.sh: No such file or directory".
+*.sh text eol=lf
+Dockerfile text eol=lf
