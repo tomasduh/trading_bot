@@ -104,6 +104,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 STATIC_DIR = BASE_DIR / "static"
 LOG_FILE   = BASE_DIR / "logs" / "bot.log"
 PAUSE_FILE = BASE_DIR / "data" / ".paused"
+CB_RESUME_FILE = BASE_DIR / "data" / ".cb_resumed_at"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # ── Auth (obligatoria vía DASHBOARD_TOKEN env var) ────────────────────────────
@@ -781,6 +782,11 @@ def resume_bot(request: Request,
     _check_auth(authorization)
     if PAUSE_FILE.exists():
         PAUSE_FILE.unlink()
+    # Marca cuándo se reanudó: el circuit breaker usa esto para no contar
+    # contra la racha de pérdidas que causó la pausa (evita el loop
+    # resume → siguiente ciclo vuelve a pausar con la misma racha vieja).
+    CB_RESUME_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CB_RESUME_FILE.write_text(datetime.now(timezone.utc).isoformat())
     logger.info("Bot reanudado vía API")
     return {"status": "running"}
 
