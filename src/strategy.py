@@ -114,9 +114,10 @@ def evaluate(df: pd.DataFrame) -> Signal:
         df = indicators.add_all(df)
     df = df.dropna()
 
-    # Necesitamos al menos EMA_TREND_SLOW + 2 velas para tener todos los indicadores
-    min_len = max(4, config.EMA_TREND_SLOW + 2) if config.USE_TREND_FILTER else 4
-    if len(df) < min_len:
+    # Después de dropna los indicadores ya están calculados — solo necesitamos
+    # curr (iloc[-2]) + prev (iloc[-3]) + margen = 4 filas mínimo.
+    # El warmup de EMA_TREND_SLOW aplica al df RAW, no al df post-dropna.
+    if len(df) < 4:
         return Signal("NONE", "not enough data", 0, 0, 0, 0, 0)
 
     # Última vela CERRADA (anti look-ahead)
@@ -172,7 +173,10 @@ def evaluate(df: pd.DataFrame) -> Signal:
 
     # ── Decisión con filtro de tendencia ─────────────────────────────────────
     if len(buy_conditions) >= threshold:
-        if config.USE_TREND_FILTER and trend != "up":
+        # Permitir BUY en tendencia "up" o "neutral". Solo bloquear si tendencia es
+        # explícitamente "down" (EMA21 < EMA50 con ADX > 20 = bajista confirmado).
+        # Antes era trend != "up", lo que bloqueaba mercados laterales (neutral) innecesariamente.
+        if config.USE_TREND_FILTER and trend == "down":
             return Signal("NONE",
                 f"BUY bloqueado por filtro de tendencia (trend={trend}, adx={adx:.1f}) | activas: {', '.join(buy_conditions)}",
                 price, rsi, ema_fast, ema_slow, macd_hist, 0,
