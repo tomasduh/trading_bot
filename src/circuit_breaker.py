@@ -25,6 +25,19 @@ from src.database import Trade, get_session
 
 logger = logging.getLogger("circuit_breaker")
 
+CB_RESUME_FILE = config.BASE_DIR / "data" / ".cb_resumed_at"
+
+
+def _resumed_at() -> Optional[datetime]:
+    """Timestamp del último /api/resume, si existe. Se usa para que la
+    condición de racha de pérdidas no siga contando contra trades cerrados
+    antes del resume — si no, el bot queda en loop resume → repause en el
+    siguiente ciclo con la misma racha que causó la pausa original."""
+    try:
+        return _aware(datetime.fromisoformat(CB_RESUME_FILE.read_text().strip()))
+    except (FileNotFoundError, ValueError):
+        return None
+
 
 def _aware(dt: Optional[datetime]) -> Optional[datetime]:
     """Normaliza datetime a timezone-aware UTC (los viejos en SQLite no tienen tz)."""
@@ -125,8 +138,12 @@ class CircuitBreaker:
             return True, reason
 
         # ── Condición 3: Trades perdedores consecutivos ──────────────────────
+        # Solo considera trades cerrados después del último resume manual,
+        # para no repausar con la misma racha que ya causó la pausa anterior.
+        resumed_at = _resumed_at()
         closed_sorted = sorted(
-            [t for t in trades if t.exit_time],
+            [t for t in trades
+             if t.exit_time and (resumed_at is None or _aware(t.exit_time) >= resumed_at)],
             key=lambda t: _aware(t.exit_time),
         )
         consecutive = 0
