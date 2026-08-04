@@ -8,7 +8,6 @@ import csv
 import json
 import logging
 import asyncio
-import socket
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -519,9 +518,9 @@ def _refresh_price_cache_sync():
     now = time.time()
     if not STOCK_SYMBOLS:
         return
-    # Socket-level timeout: garantiza que el thread termine aunque Alpaca cuelgue.
-    old_timeout = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(12.0)
+    # El timeout real ahora vive en alpaca_fetcher (session.request(timeout=15)),
+    # que cubre también conexiones reusadas del pool — un socket.setdefaulttimeout()
+    # global aquí era racy entre threads y no bastaba si la conexión ya estaba abierta.
     try:
         req = StockLatestTradeRequest(symbol_or_symbols=STOCK_SYMBOLS)
         result = alpaca_fetcher.data_client.get_stock_latest_trade(req)
@@ -533,8 +532,6 @@ def _refresh_price_cache_sync():
         logger.debug("batch price refresh OK: %d symbols", len(result))
     except Exception as e:
         logger.warning("batch price refresh failed: %s", e)
-    finally:
-        socket.setdefaulttimeout(old_timeout)
 
 
 def _build_signals() -> list:
