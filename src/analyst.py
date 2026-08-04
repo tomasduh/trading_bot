@@ -223,7 +223,11 @@ def generate_report() -> dict:
         trade_stats["exit_reasons"][reason] = trade_stats["exit_reasons"].get(reason, 0) + 1
 
         if t.entry_time and t.exit_time:
-            dur = (t.exit_time - t.entry_time).total_seconds() / 60
+            # Normalizar a naive UTC para evitar TypeError cuando un timestamp
+            # viene sin timezone (SQLite) y el otro con timezone (Python).
+            entry = t.entry_time.replace(tzinfo=None) if t.entry_time.tzinfo else t.entry_time
+            exit_ = t.exit_time.replace(tzinfo=None) if t.exit_time.tzinfo else t.exit_time
+            dur = (exit_ - entry).total_seconds() / 60
             durations.append(dur)
 
         summary = {"id": t.id, "pnl_usdt": round(pnl, 2),
