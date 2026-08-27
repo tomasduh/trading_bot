@@ -65,7 +65,7 @@ TIMEFRAME    = "15m"
 # - EMA_TREND_SLOW=50 → warmup 50, quedan 150 velas usables
 # - RSI 14, MACD 26, BB 20, ADX 14, ATR 14 → todos OK
 # Reducido de 400→200 para bajar memoria (era ~237MB RSS → 512MB OOM)
-CANDLES_LIMIT = 100   # reducido 200→100 para aliviar memoria VM 512MB
+CANDLES_LIMIT = 80    # reducido 200→100→80 para aliviar memoria VM 512MB
 
 # ── Indicadores ───────────────────────────────────────────────────────────────
 EMA_FAST = 9
@@ -88,7 +88,7 @@ ADX_THRESHOLD = 20     # ADX > 20 indica tendencia con fuerza
 # ── Estrategia ────────────────────────────────────────────────────────────────
 # Hybrid C: score=2 mantiene la calidad de señal (mejor WR que score=1).
 # El backtest mostró que score=1 deteriora WR significativamente (18% vs 27%).
-MIN_SIGNAL_SCORE = 2          # mínimo de condiciones para disparar señal
+MIN_SIGNAL_SCORE = 1          # mínimo de condiciones para disparar señal (era 2, bajado para generar más BUYs)
 USE_TREND_FILTER = True       # solo BUY en tendencia alcista, SELL en bajista
 DISABLE_SIGNAL_EXIT = False   # si True: solo cierra por SL/TP/Trailing, no por SELL signal
 SIGNAL_EXIT_ONLY_IN_LOSS = True  # si True: SELL signal solo cierra si el trade está en pérdida real
@@ -119,9 +119,9 @@ LOG_DIR.mkdir(exist_ok=True)
 # Si el 4h está en tendencia bajista → BUY bloqueado aunque el 30m diga BUY.
 # VALIDADO POR BACKTEST: hybrid_C (con MTF on) dio -6.20% PnL vs -8.28% sin MTF
 # en 60d. El filtro macro reduce trades pero mejora PnL en bear markets.
-USE_MTF         = False        # ⚠️ TEMPORALMENTE OFF — la VM 512MB se saturaba
-                              # con 22 símbolos × 2 fetches (15m + 4h). Reactivar
-                              # cuando upgrademos memoria o reduzcamos símbolos.
+USE_MTF         = True         # ON — con 5 cryptos (vs 22 anteriores) la VM aguanta.
+                              # Backtest 30d muestra +0.01% PnL (unico config positivo)
+                              # vs -3.66% sin MTF. Activado 2026-05-26.
 MTF_TIMEFRAME   = "4h"        # timeframe macro para confirmación de tendencia
 
 # ── Cap global de exposición (Fase 4.3) ───────────────────────────────────────

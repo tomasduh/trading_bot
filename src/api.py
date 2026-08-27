@@ -8,6 +8,7 @@ import csv
 import json
 import logging
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime, timezone
@@ -22,11 +23,16 @@ from slowapi.errors import RateLimitExceeded
 from src.config import BASE_DIR, CRYPTO_SYMBOLS, STOCK_SYMBOLS, TIMEFRAME, LOOP_INTERVAL_SECONDS
 from src.database import get_session, Trade, Signal as DbSignal, Candle
 from src import analyst, ml_analyst
+from src.bot import run_bot_forever  # importar aquí para que ccxt/Alpaca se inicialicen antes del lifespan
 
 logger = logging.getLogger("api")
 
 # ── Rate limiting ─────────────────────────────────────────────────────────────
 limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+
+# Executor dedicado para price refresh — 1 thread máximo para que los threads
+# zombie de Alpaca no saturen el thread pool compartido del event loop.
+_price_refresh_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="price-refresh")
 
 
 @asynccontextmanager
@@ -53,7 +59,6 @@ async def _run_bot_in_thread():
     _log = logging.getLogger("api.bot_launcher")
     _log.info("Lanzando bot loop en thread pool (single-process mode)...")
     try:
-        from src.bot import run_bot_forever
         await asyncio.to_thread(run_bot_forever)
     except Exception as e:
         _log.critical("Bot loop terminó con error: %s", e, exc_info=True)
@@ -62,29 +67,43 @@ async def _run_bot_in_thread():
 async def refresh_prices_loop():
     """Refresca el cache de precios de stocks cada 30s en background.
     No bloquea el event loop (corre en thread pool). Permite que las
-    requests al WS/REST sean instantáneas usando el cache."""
+    requests al WS/REST sean instantáneas usando el cache.
+    Usa backoff exponencial (hasta 10 min) cuando Alpaca falla repetidamente."""
     # Llenar el cache inmediatamente al arrancar
     try:
-        await asyncio.to_thread(_refresh_price_cache_sync)
+        loop = asyncio.get_event_loop()
+        await asyncio.wait_for(loop.run_in_executor(_price_refresh_executor, _refresh_price_cache_sync), timeout=15.0)
         logger.info("Stock price cache initialized (%d symbols)", len(_price_cache))
     except Exception as e:
         logger.warning("Initial price cache refresh failed: %s", e)
 
+    consecutive_failures = 0
     while True:
-        await asyncio.sleep(30)
+        # Backoff: 30s → 60s → 120s → 240s → cap 600s
+        delay = min(30 * (2 ** consecutive_failures), 600)
+        await asyncio.sleep(delay)
         try:
-            await asyncio.to_thread(_refresh_price_cache_sync)
+            loop = asyncio.get_event_loop()
+            await asyncio.wait_for(loop.run_in_executor(_price_refresh_executor, _refresh_price_cache_sync), timeout=15.0)
+            if consecutive_failures > 0:
+                logger.info("price refresh OK — resetting backoff")
+            consecutive_failures = 0
+        except asyncio.TimeoutError:
+            consecutive_failures += 1
+            logger.warning("price refresh timed out (>15s) — backoff %ds", min(30 * (2 ** consecutive_failures), 600))
         except Exception as e:
-            logger.warning("price refresh loop error: %s", e)
+            consecutive_failures += 1
+            logger.warning("price refresh loop error (backoff %ds): %s", min(30 * (2 ** consecutive_failures), 600), e)
 
 
 app = FastAPI(title="Trading Bot Dashboard", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-STATIC_DIR = BASE_DIR / "static"
-LOG_FILE   = BASE_DIR / "logs" / "bot.log"
-PAUSE_FILE = BASE_DIR / "data" / ".paused"
+STATIC_DIR      = BASE_DIR / "static"
+LOG_FILE        = BASE_DIR / "logs" / "bot.log"
+PAUSE_FILE      = BASE_DIR / "data" / ".paused"
+CB_RESUME_FILE  = BASE_DIR / "data" / ".cb_resumed_at"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # ── Auth (obligatoria vía DASHBOARD_TOKEN env var) ────────────────────────────
@@ -209,17 +228,58 @@ async def watch_log():
             await asyncio.sleep(5)
 
 
+def _cycles_file_size() -> int:
+    """Retorna el tamaño en bytes del archivo cycles.jsonl (0 si no existe).
+    Mucho más barato que load_cycles() — solo stat() del filesystem."""
+    try:
+        return analyst.CYCLES_LOG.stat().st_size
+    except OSError:
+        return 0
+
+
+def _count_cycles_cheap() -> tuple[int, str | None]:
+    """Cuenta líneas y lee el último ts de cycles.jsonl sin cargar todo en RAM.
+    Lee el archivo de atrás hacia adelante (máx 512 bytes) para el último ts,
+    y cuenta líneas con un buffer pequeño. O(n) en líneas pero O(1) en RAM."""
+    if not analyst.CYCLES_LOG.exists():
+        return 0, None
+    count = 0
+    last_ts = None
+    try:
+        with open(analyst.CYCLES_LOG, "rb") as f:
+            # Contar líneas con buffer de 64KB (evita cargar 8MB+ en RAM)
+            buf_size = 65536
+            buf = f.read(buf_size)
+            while buf:
+                count += buf.count(b"\n")
+                buf = f.read(buf_size)
+            # Leer último ts: buscar la última línea no vacía
+            # Buffer generoso — las líneas de ciclo (con snapshot de indicadores)
+            # rondan 500-600 bytes; 512 las cortaba a la mitad y rompía el parseo.
+            f.seek(0, 2)
+            fsize = f.tell()
+            tail = min(8192, fsize)
+            f.seek(fsize - tail)
+            last_bytes = f.read(tail).decode("utf-8", errors="ignore")
+            last_line = next((l for l in reversed(last_bytes.splitlines()) if l.strip()), None)
+            if last_line:
+                last_ts = json.loads(last_line).get("ts")
+    except Exception:
+        pass
+    return count, last_ts
+
+
 async def watch_data():
     """Cada 5s actualiza estado, señales, trades."""
-    last_cycle_count = 0
+    last_cycle_size = 0
     last_trade_count = 0
     consecutive_errors = 0
     while True:
         await asyncio.sleep(5)
         try:
-            cycles = analyst.load_cycles()
-            if len(cycles) != last_cycle_count:
-                last_cycle_count = len(cycles)
+            cycle_size = _cycles_file_size()
+            if cycle_size != last_cycle_size:
+                last_cycle_size = cycle_size
                 # to_thread evita bloquear el event loop (12+ Alpaca API calls)
                 signals = await asyncio.to_thread(_build_signals)
                 status  = await asyncio.to_thread(_build_status)
@@ -325,8 +385,22 @@ async def websocket_endpoint(ws: WebSocket, token: str | None = None):
         await ws.send_json({"type": "log",     "lines": log_data})
         logger.info("WS initial data sent OK")
 
+        # Receive loop con timeout activo. Si el cliente no manda nada en
+        # WS_RECEIVE_TIMEOUT segundos, enviamos un ping de aplicación para
+        # verificar que la conexión sigue viva y evitar que el proxy de
+        # Fly.io la mate por idle. Si el send falla, la conexión está muerta.
+        WS_RECEIVE_TIMEOUT = 25  # segundos — por debajo del idle timeout de Fly.io (60s)
         while True:
-            await ws.receive_text()
+            try:
+                msg = await asyncio.wait_for(ws.receive_text(), timeout=WS_RECEIVE_TIMEOUT)
+                if msg == "ping":
+                    await ws.send_text("pong")
+            except asyncio.TimeoutError:
+                try:
+                    await ws.send_json({"type": "ping", "ts": datetime.now(timezone.utc).isoformat()})
+                except Exception:
+                    manager.disconnect(ws)
+                    break
     except WebSocketDisconnect:
         manager.disconnect(ws)
     except Exception as e:
@@ -367,7 +441,8 @@ def _build_status() -> dict:
                 "mtm_pnl_pct":  round(mtm_pct * 100, 3),
             })
 
-    cycles = analyst.load_cycles()
+    # Contar ciclos y obtener el último ts sin cargar el archivo completo
+    cycle_count, last_cycle_ts = _count_cycles_cheap()
     return {
         "total_trades":     len(closed),
         "open_trades":      open_list,
@@ -375,8 +450,8 @@ def _build_status() -> dict:
         "losses":           len(closed) - wins,
         "win_rate":         round(wins / len(closed) * 100, 1) if closed else 0,
         "total_pnl_usdt":   round(pnl_sum, 2),
-        "total_cycles":     len(cycles),
-        "last_cycle":       cycles[-1]["ts"] if cycles else None,
+        "total_cycles":     cycle_count,
+        "last_cycle":       last_cycle_ts,
         "crypto_symbols":   CRYPTO_SYMBOLS,
         "stock_symbols":    STOCK_SYMBOLS,
         "timeframe":        TIMEFRAME,
@@ -435,18 +510,28 @@ def _fetch_stock_price_fallback(symbol: str, allow_blocking: bool = False) -> fl
 
 def _refresh_price_cache_sync():
     """Refresca el cache de precios para todos los stocks en background.
-    Se llama desde un task async vía to_thread — toma ~2-5s pero no bloquea
-    el event loop principal."""
+    Usa una sola llamada batch (todos los símbolos a la vez) para evitar
+    que conexiones colgadas saturen el thread pool."""
     import time
     from src import alpaca_fetcher
+    from alpaca.data.requests import StockLatestTradeRequest
     now = time.time()
-    for symbol in STOCK_SYMBOLS:
-        try:
-            live = alpaca_fetcher.get_latest_trade_price(symbol)
-            if live and live > 0:
-                _price_cache[symbol] = (live, now + _PRICE_CACHE_TTL_SECONDS)
-        except Exception as e:
-            logger.debug("refresh price %s: %s", symbol, e)
+    if not STOCK_SYMBOLS:
+        return
+    # El timeout real ahora vive en alpaca_fetcher (session.request(timeout=15)),
+    # que cubre también conexiones reusadas del pool — un socket.setdefaulttimeout()
+    # global aquí era racy entre threads y no bastaba si la conexión ya estaba abierta.
+    try:
+        req = StockLatestTradeRequest(symbol_or_symbols=STOCK_SYMBOLS)
+        result = alpaca_fetcher.data_client.get_stock_latest_trade(req)
+        for symbol in STOCK_SYMBOLS:
+            if symbol in result:
+                price = float(result[symbol].price)
+                if price > 0:
+                    _price_cache[symbol] = (price, now + _PRICE_CACHE_TTL_SECONDS)
+        logger.debug("batch price refresh OK: %d symbols", len(result))
+    except Exception as e:
+        logger.warning("batch price refresh failed: %s", e)
 
 
 def _build_signals() -> list:
@@ -696,6 +781,11 @@ def resume_bot(request: Request,
     _check_auth(authorization)
     if PAUSE_FILE.exists():
         PAUSE_FILE.unlink()
+    # Marca cuándo se reanudó: el circuit breaker usa esto para no contar
+    # contra la racha de pérdidas que causó la pausa (evita el loop
+    # resume → siguiente ciclo vuelve a pausar con la misma racha vieja).
+    CB_RESUME_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CB_RESUME_FILE.write_text(datetime.now(timezone.utc).isoformat())
     logger.info("Bot reanudado vía API")
     return {"status": "running"}
 

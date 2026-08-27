@@ -426,6 +426,7 @@ function connect() {
         else if (msg.line) appendLogLine(msg.line);
         break;
       case 'heartbeat': /* solo refresca lastHeartbeat */ break;
+      case 'ping': ws.send('ping'); break;
       default: console.warn('WS unknown type:', msg.type);
     }
   };

@@ -3,6 +3,7 @@ Fetcher para Alpaca Paper Trading (stocks).
 Equivalente a data_fetcher.py pero para acciones US.
 """
 import os
+import functools
 import logging
 import pandas as pd
 from datetime import datetime, timezone, timedelta
@@ -33,6 +34,15 @@ BASE_URL   = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
 trading_client = TradingClient(API_KEY, SECRET_KEY, paper=True)
 data_client    = StockHistoricalDataClient(API_KEY, SECRET_KEY)
+
+# alpaca-py no expone un parámetro de timeout: internamente hace
+# self._session.request(method, url, **opts) sin "timeout" en opts, así que
+# un hang de red deja el thread bloqueado para siempre (visto en prod: OOM
+# 2026-08-04 precedido de ~40min de "price refresh timed out" repetido).
+# Se parchea la sesión de requests de cada cliente para forzar timeout real
+# en cada llamada HTTP, incluso sobre conexiones reusadas del pool.
+for _client in (trading_client, data_client):
+    _client._session.request = functools.partial(_client._session.request, timeout=15)
 
 # Mapeo de timeframe string → Alpaca TimeFrame
 _TF_MAP = {

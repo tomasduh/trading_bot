@@ -57,15 +57,20 @@ class SimTrade:
 
 def fetch_history(symbol: str, timeframe: str, days: int) -> pd.DataFrame:
     """
-    Descarga ohlcv históricos vía ccxt (paginado para soportar miles de velas).
-    Funciona en modo public (no requiere keys).
+    Descarga ohlcv históricos. Despacha por tipo de símbolo:
+    - Crypto (contiene '/') → Binance vía ccxt (público, sin auth)
+    - Stock (sin '/')       → Alpaca Historical API (requiere ALPACA_API_KEY)
     """
+    if "/" in symbol:
+        return _fetch_history_crypto(symbol, timeframe, days)
+    return _fetch_history_stock(symbol, timeframe, days)
+
+
+def _fetch_history_crypto(symbol: str, timeframe: str, days: int) -> pd.DataFrame:
     import ccxt
-    # Siempre usamos mainnet para backtesting (datos públicos, no auth necesaria)
-    # El testnet solo tiene historia limitada y errática.
     ex = ccxt.binance({"enableRateLimit": True, "timeout": 20000})
 
-    tf_seconds = ex.parse_timeframe(timeframe)  # segundos por vela
+    tf_seconds = ex.parse_timeframe(timeframe)
     since = ex.milliseconds() - days * 24 * 60 * 60 * 1000
 
     all_rows = []
@@ -83,6 +88,52 @@ def fetch_history(symbol: str, timeframe: str, days: int) -> pd.DataFrame:
     df = df.drop_duplicates(subset="timestamp")
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     df = df.set_index("timestamp").sort_index()
+    return df
+
+
+def _fetch_history_stock(symbol: str, timeframe: str, days: int) -> pd.DataFrame:
+    """Descarga histórico de stocks vía Alpaca Historical API (IEX feed, gratuito)."""
+    import os
+    from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.enums import DataFeed
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+
+    api_key    = os.getenv("ALPACA_API_KEY", "")
+    secret_key = os.getenv("ALPACA_SECRET_KEY", "")
+    client     = StockHistoricalDataClient(api_key, secret_key)
+
+    tf_map = {
+        "1m":  TimeFrame(1,  TimeFrameUnit.Minute),
+        "5m":  TimeFrame(5,  TimeFrameUnit.Minute),
+        "15m": TimeFrame(15, TimeFrameUnit.Minute),
+        "30m": TimeFrame(30, TimeFrameUnit.Minute),
+        "1h":  TimeFrame(1,  TimeFrameUnit.Hour),
+        "4h":  TimeFrame(4,  TimeFrameUnit.Hour),
+        "1d":  TimeFrame(1,  TimeFrameUnit.Day),
+    }
+    tf  = tf_map.get(timeframe, TimeFrame(15, TimeFrameUnit.Minute))
+    end   = datetime.now(timezone.utc)
+    start = end - timedelta(days=days)
+
+    req = StockBarsRequest(
+        symbol_or_symbols=symbol,
+        timeframe=tf,
+        start=start,
+        end=end,
+        feed=DataFeed.IEX,
+    )
+    bars = client.get_stock_bars(req)
+    df   = bars.df
+
+    if df.empty:
+        return pd.DataFrame(columns=["open","high","low","close","volume"])
+
+    if isinstance(df.index, pd.MultiIndex):
+        df = df.xs(symbol, level="symbol")
+
+    df.index = pd.to_datetime(df.index, utc=True)
+    df = df[["open","high","low","close","volume"]].sort_index()
     return df
 
 
@@ -108,7 +159,8 @@ def run_backtest(symbol: str, timeframe: str = "30m",
             return {"symbol": symbol, "timeframe": timeframe, "days": days,
                     "error": f"fetch falló: {e}"}
 
-    if df.empty or len(df) < 250:
+    min_candles = 80 if "/" not in symbol else 250
+    if df.empty or len(df) < min_candles:
         return {"symbol": symbol, "timeframe": timeframe, "days": days,
                 "error": f"datos insuficientes ({len(df)} velas)"}
 
@@ -344,13 +396,19 @@ def main():
     parser.add_argument("symbol", nargs="?", help="ej: BTC/USDT")
     parser.add_argument("timeframe", nargs="?", default="30m")
     parser.add_argument("days", nargs="?", type=int, default=90)
-    parser.add_argument("--all", action="store_true", help="todos los símbolos crypto")
+    parser.add_argument("--all", action="store_true", help="todos los simbolos (crypto + stocks)")
+    parser.add_argument("--stocks", action="store_true", help="solo stocks Alpaca")
     parser.add_argument("--capital", type=float, default=10_000.0)
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-    symbols = config.CRYPTO_SYMBOLS if args.all else [args.symbol or config.CRYPTO_SYMBOLS[0]]
+    if args.all:
+        symbols = list(config.CRYPTO_SYMBOLS) + list(config.STOCK_SYMBOLS)
+    elif args.stocks:
+        symbols = list(config.STOCK_SYMBOLS)
+    else:
+        symbols = [args.symbol or config.CRYPTO_SYMBOLS[0]]
 
     for sym in symbols:
         report = run_backtest(sym, args.timeframe, args.days, args.capital)
