@@ -238,6 +238,13 @@
           <tbody id="trades-table" class="divide-y divide-slate-800 text-slate-300"></tbody>
         </table>
         <p id="no-trades" class="text-center text-slate-500 py-8">Sin trades aún — el bot está buscando señales</p>
+        <div id="trades-pagination" class="flex items-center justify-between mt-3 text-xs text-slate-400">
+          <span id="trades-page-info"></span>
+          <div class="flex items-center gap-2">
+            <button id="trades-prev" class="px-2.5 py-1 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed text-slate-200">‹ Anterior</button>
+            <button id="trades-next" class="px-2.5 py-1 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40 disabled:cursor-not-allowed text-slate-200">Siguiente ›</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>

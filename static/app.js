@@ -8,6 +8,8 @@ let lastHeartbeat   = 0;
 let staleCheckTimer = null;
 let allTrades       = [];
 let tradeFilter     = "";
+let tradePage       = 1;
+const TRADES_PAGE_SIZE = 10;
 
 const STALE_THRESHOLD_MS = 30_000;  // sin heartbeat 30s → mostrar "stale"
 
@@ -169,17 +171,32 @@ function refreshTradesView() {
         (t.exit_reason || '').toLowerCase().includes(tradeFilter))
     : allTrades;
 
+  const pagination = document.getElementById('trades-pagination');
+
   if (!filtered.length) {
     tbody.innerHTML = '';
     noTrades.style.display = 'block';
     noTrades.textContent = allTrades.length
       ? 'Ningún trade coincide con el filtro'
       : 'Sin trades aún — el bot está buscando señales';
+    pagination.style.display = 'none';
     return;
   }
   noTrades.style.display = 'none';
 
-  tbody.innerHTML = filtered.map(t => {
+  const totalPages = Math.max(1, Math.ceil(filtered.length / TRADES_PAGE_SIZE));
+  if (tradePage > totalPages) tradePage = totalPages;
+  if (tradePage < 1) tradePage = 1;
+  const start = (tradePage - 1) * TRADES_PAGE_SIZE;
+  const pageItems = filtered.slice(start, start + TRADES_PAGE_SIZE);
+
+  pagination.style.display = filtered.length > TRADES_PAGE_SIZE ? 'flex' : 'none';
+  document.getElementById('trades-page-info').textContent =
+    `Página ${tradePage} de ${totalPages} (${filtered.length} trades)`;
+  document.getElementById('trades-prev').disabled = tradePage <= 1;
+  document.getElementById('trades-next').disabled = tradePage >= totalPages;
+
+  tbody.innerHTML = pageItems.map(t => {
     const pnl    = t.pnl_usdt;
     const status = t.status === 'OPEN'
       ? '<span class="badge-open px-2 py-0.5 rounded text-xs">ABIERTO</span>'
@@ -446,6 +463,15 @@ document.getElementById('btn-pause').addEventListener('click', pauseBot);
 document.getElementById('btn-resume').addEventListener('click', resumeBot);
 document.getElementById('trade-filter').addEventListener('input', e => {
   tradeFilter = e.target.value.toLowerCase().trim();
+  tradePage = 1;
+  refreshTradesView();
+});
+document.getElementById('trades-prev').addEventListener('click', () => {
+  tradePage--;
+  refreshTradesView();
+});
+document.getElementById('trades-next').addEventListener('click', () => {
+  tradePage++;
   refreshTradesView();
 });
 startStaleWatcher();
