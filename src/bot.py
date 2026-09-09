@@ -170,11 +170,16 @@ def _extract_ml_features(df_ind, signal, live_price: float) -> dict:
 
 
 def process_market(symbol: str, executor: TradeExecutor, capital: float,
-                   fetcher, label: str = "CRYPTO"):
+                   fetcher, label: str = "CRYPTO") -> float:
     """
     Procesa un ciclo de análisis y ejecución para un símbolo (crypto o stock).
     `fetcher` debe tener método fetch_ohlcv(symbol, timeframe).
     `label` es "CRYPTO" o "STOCK" — solo para formato de log.
+
+    Devuelve el notional (USDT/USD) comprometido si abrió un trade nuevo, o 0.0.
+    El caller (run_cycle) lo resta del capital disponible para el resto del ciclo
+    — evita que dos símbolos que abren en el mismo ciclo se pisen usando el mismo
+    balance ya gastado por el primero.
     """
     width = 12 if label == "CRYPTO" else 6
     try:
@@ -183,14 +188,14 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
             if label == "STOCK" else fetcher.fetch_ohlcv(symbol=symbol)
         if df.empty or len(df) < 30:
             logger.warning(f"  {symbol:<{width}} sin suficientes datos")
-            return
+            return 0.0
 
         df_ind = indicators.add_all(df)
         live_price = float(df_ind["close"].iloc[-1])
         ind_snap = _indicator_snapshot(df_ind)
         if ind_snap is None:
             logger.warning(f"  {symbol:<{width}} indicadores en warmup")
-            return
+            return 0.0
 
         logger.info(
             f"  {symbol:<{width}} @ {live_price:>10,.2f} | "
@@ -217,7 +222,7 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
                 )
             analyst.log_cycle(live_price, ind_snap, strategy.evaluate(df_ind),
                               trade_action="CLOSED", symbol=symbol)
-            return
+            return 0.0
 
         # 2. Evaluar señal — multi-timeframe si está habilitado
         if config.USE_MTF:
@@ -241,6 +246,7 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
         signal.price = live_price   # precio vivo, no el de la vela cerrada
         trade_action = None
         acted = False
+        notional_committed = 0.0
 
         if signal.type != "NONE":
             logger.info(
@@ -261,6 +267,7 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
                 if trade:
                     trade_action = "OPENED"
                     acted = True
+                    notional_committed = trade.entry_price * trade.quantity
                     alerts.notify_trade_opened(symbol, trade.entry_price,
                                                 trade.quantity, trade.stop_loss,
                                                 trade.take_profit, signal.reason)
@@ -305,11 +312,13 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
         persist_signal(symbol, signal, acted)
         analyst.log_cycle(live_price, ind_snap, signal,
                           trade_action=trade_action, symbol=symbol)
+        return notional_committed
 
     except DataFetchError as e:
         logger.warning(f"  [{symbol}] Error temporal de datos: {e}")
     except Exception as e:
         logger.error(f"  [{symbol}] Error inesperado: {e}", exc_info=True)
+    return 0.0
 
 
 def _ping_watchdog():
@@ -353,8 +362,13 @@ def run_cycle(executor: TradeExecutor, initial_capital: float = 10_000.0):
         balance = data_fetcher.fetch_balance()
         usdt_free = float(balance.get("free", {}).get("USDT", 0))
         logger.info(f"[CRYPTO] Balance USDT: {usdt_free:,.2f}")
+        # Se descuenta lo comprometido por cada símbolo dentro del mismo ciclo:
+        # sin esto, dos señales BUY en el mismo ciclo sizean ambas contra el
+        # balance de ANTES del ciclo, pudiendo pedir en conjunto más notional
+        # del que realmente queda libre en la cuenta.
+        available_usdt = usdt_free
         for symbol in config.CRYPTO_SYMBOLS:
-            process_market(symbol, executor, usdt_free, data_fetcher, "CRYPTO")
+            available_usdt -= process_market(symbol, executor, available_usdt, data_fetcher, "CRYPTO")
     except DataFetchError as e:
         logger.warning(f"[CRYPTO] No se pudo obtener balance: {e}")
     gc.collect()   # liberar DataFrames de crypto antes de procesar stocks
@@ -365,8 +379,9 @@ def run_cycle(executor: TradeExecutor, initial_capital: float = 10_000.0):
             bal = alpaca_fetcher.fetch_balance()
             usd_free = bal["free"]["USD"]
             logger.info(f"[STOCKS] Mercado abierto | Cash: ${usd_free:,.2f}")
+            available_usd = usd_free
             for symbol in config.STOCK_SYMBOLS:
-                process_market(symbol, executor, usd_free, alpaca_fetcher, "STOCK")
+                available_usd -= process_market(symbol, executor, available_usd, alpaca_fetcher, "STOCK")
         else:
             logger.info("[STOCKS] Mercado cerrado — esperando apertura (9:30 ET)")
     except Exception as e:

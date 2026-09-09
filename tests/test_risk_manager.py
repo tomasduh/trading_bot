@@ -7,9 +7,24 @@ from src import config, risk_manager
 
 
 def test_position_size_uses_risk_pct():
-    # 1000 USDT * 1% / (50000 * 2%) = 10 / 1000 = 0.01 BTC
+    # 1000 USDT * 1% / (50000 * 2%) = 10 / 1000 = 0.01 BTC → notional $500 (50% del
+    # capital), pero MAX_POSITION_PCT_OF_CAPITAL (20%) topea antes: 1000*0.20/50000 = 0.004
     qty = risk_manager.position_size(capital_usdt=1000, entry_price=50_000)
-    assert qty == 0.01, f"Esperado 0.01, obtenido {qty}"
+    assert qty == 0.004, f"Esperado 0.004, obtenido {qty}"
+
+
+def test_position_size_never_exceeds_max_pct_of_capital():
+    # Sin el cap, el ratio riesgo/stop da 50% del capital en un solo trade
+    # (RISK_PER_TRADE / STOP_LOSS_PCT = 1%/2%). El cap debe impedirlo siempre,
+    # a cualquier escala de capital. Se pasa symbol para usar los límites reales
+    # de BTC/USDT (step fino) en vez del fallback genérico usado cuando no hay symbol.
+    for capital in (50, 1_000, 10_000):
+        qty = risk_manager.position_size(capital_usdt=capital, entry_price=50_000, symbol="BTC/USDT")
+        notional = qty * 50_000
+        assert notional <= capital * config.MAX_POSITION_PCT_OF_CAPITAL + 1e-6, (
+            f"capital={capital}: notional {notional} supera el cap de "
+            f"{config.MAX_POSITION_PCT_OF_CAPITAL*100:.0f}%"
+        )
 
 
 def test_stop_loss_below_entry():

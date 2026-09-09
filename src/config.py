@@ -102,6 +102,13 @@ STOP_LOSS_PCT = 0.02         # stop loss 2% (conservador, validado por backtest)
 TAKE_PROFIT_PCT = 0.04       # take profit 4% (ratio 2:1)
 MAX_OPEN_TRADES = 1          # máximo 1 posición abierta por símbolo
 
+# notional = capital × (RISK_PER_TRADE / STOP_LOSS_PCT) = capital × 0.5 SIEMPRE,
+# sin importar el tamaño de la cuenta (a $10k son $5k por trade, a $50 son $25).
+# En cuentas grandes nunca se notó porque el balance real sobra; en cuentas chicas
+# un solo trade puede comprometer medio capital. Este cap topea el notional por
+# trade independientemente del ratio riesgo/stop, relevante sobre todo a capital bajo.
+MAX_POSITION_PCT_OF_CAPITAL = 0.20   # ningún trade individual supera 20% del capital
+
 # Trailing stop: el optimizer demostró que con SL 2% / TP 4% el TS corta trades
 # prematuramente. Desactivado tras backtest 90d × 4 símbolos (variante F ganadora).
 USE_TRAILING_STOP   = False

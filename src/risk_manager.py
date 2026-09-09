@@ -58,6 +58,12 @@ def position_size(capital_usdt: float, entry_price: float, symbol: str | None = 
         return 0.0
     qty_raw = risk_usdt / loss_per_unit
 
+    # Cap adicional: ningún trade individual compromete más de
+    # MAX_POSITION_PCT_OF_CAPITAL del capital, sin importar el ratio riesgo/stop.
+    if entry_price > 0:
+        max_qty_by_capital = (capital_usdt * config.MAX_POSITION_PCT_OF_CAPITAL) / entry_price
+        qty_raw = min(qty_raw, max_qty_by_capital)
+
     limits = _get_limits(symbol) if symbol else _SYMBOL_LIMITS["BTC/USDT"]
     step       = limits["step"]
     min_qty    = limits["min_qty"]

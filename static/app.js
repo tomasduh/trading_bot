@@ -9,6 +9,7 @@ let staleCheckTimer = null;
 let allTrades       = [];
 let tradeFilter     = "";
 let tradePage       = 1;
+let symbolsPopulated = false;
 const TRADES_PAGE_SIZE = 10;
 
 const STALE_THRESHOLD_MS = 30_000;  // sin heartbeat 30s → mostrar "stale"
@@ -82,7 +83,20 @@ const timeAgo = iso => {
 
 // ── Renders ───────────────────────────────────────────────────────────────────
 
+function populateSymbolDropdown(cryptoSymbols, stockSymbols) {
+  const select   = document.getElementById('chart-symbol');
+  const previous = select.value;
+  const all      = [...cryptoSymbols, ...stockSymbols];
+  select.innerHTML = all.map(sym => `<option value="${sym}">${sym}</option>`).join('');
+  if (all.includes(previous)) select.value = previous;
+  symbolsPopulated = true;
+}
+
 function renderStatus(d) {
+  if (!symbolsPopulated && d.crypto_symbols && d.stock_symbols) {
+    populateSymbolDropdown(d.crypto_symbols, d.stock_symbols);
+    loadPriceChart();
+  }
   const pnl = d.total_pnl_usdt;
   document.getElementById('total-pnl').innerHTML =
     `<span class="${pnlClass(pnl)}">${pnl >= 0 ? '+' : ''}$${fmt(pnl)}</span>`;
