@@ -20,6 +20,9 @@ from src.alerts import notify_error
 
 logger = logging.getLogger("reconciler")
 
+# Último conjunto de divergencias notificado (dedup de alertas entre ciclos)
+_last_notified: set[str] = set()
+
 
 def reconcile_crypto(executor) -> list[str]:
     """Compara trades crypto abiertos en DB vs balance en Binance.
@@ -111,13 +114,17 @@ def reconcile_all(executor) -> list[str]:
         logger.warning(f"[RECONCILE] {len(issues)} divergencia(s) detectada(s):")
         for issue in issues:
             logger.warning(f"  → {issue}")
-        # Notificar si hay más de 1 issue (1 puede ser timing normal de cierre)
-        if len(issues) >= 2:
+        # Notificar si hay más de 1 issue (1 puede ser timing normal de cierre),
+        # y solo cuando el conjunto cambia: corre cada ciclo y no debe spamear.
+        global _last_notified
+        if len(issues) >= 2 and set(issues) != _last_notified:
+            _last_notified = set(issues)
             notify_error(
                 f"⚠️ Reconciliador: {len(issues)} divergencias DB↔exchange\n" +
                 "\n".join(f"  • {i}" for i in issues)
             )
     else:
+        _last_notified = set()
         logger.debug("[RECONCILE] OK — sin divergencias entre DB y exchange")
 
     return issues

@@ -143,7 +143,8 @@ def pnl(entry_price: float, exit_price: float, quantity: float,
     fee_pct se aplica sobre el notional de entrada Y salida (round-trip):
       total_fees = (entry_price + exit_price) * quantity * fee_pct
 
-    En producción (executor.py) fee_pct=0 porque el exchange ya lo descuenta.
+    En producción (executor.py) se pasa config.FEE_PCT[symbol]: los precios ya son
+    los de ejecución real (incluyen slippage), pero el fee no está en el precio.
     En backtest se pasa config.FEE_PCT[symbol] + config.SLIPPAGE_PCT para
     simular el coste real de cada trade.
     """

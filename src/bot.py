@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from src import config, data_fetcher, strategy, logger as log_setup
 from src.database import init_db, Candle, Signal as DbSignal, get_session
 from src.executor import TradeExecutor
-from src import indicators, analyst, alerts, reconciler
+from src import indicators, analyst, alerts, reconciler, backup
 from src import alpaca_fetcher
 from src.circuit_breaker import get_breaker
 from src.data_fetcher import DataFetchError, FatalDataFetchError
@@ -212,7 +212,7 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
         if trigger:
             closed = executor.close_trade(symbol, live_price, trigger)
             if closed:
-                alerts.notify_trade_closed(symbol, closed.entry_price, live_price,
+                alerts.notify_trade_closed(symbol, closed.entry_price, closed.exit_price,
                                             closed.pnl_usdt or 0, closed.pnl_pct or 0,
                                             trigger)
                 # Feature logging: registrar outcome del trade
@@ -300,7 +300,7 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
             if closed:
                 trade_action = "CLOSED"
                 acted = True
-                alerts.notify_trade_closed(symbol, closed.entry_price, live_price,
+                alerts.notify_trade_closed(symbol, closed.entry_price, closed.exit_price,
                                             closed.pnl_usdt or 0, closed.pnl_pct or 0,
                                             "SIGNAL")
                 # Feature logging: outcome
@@ -342,7 +342,7 @@ def check_exits_only(symbol: str, executor: TradeExecutor, fetcher, label: str =
             return
         closed = executor.close_trade(symbol, live_price, trigger)
         if closed:
-            alerts.notify_trade_closed(symbol, closed.entry_price, live_price,
+            alerts.notify_trade_closed(symbol, closed.entry_price, closed.exit_price,
                                         closed.pnl_usdt or 0, closed.pnl_pct or 0,
                                         trigger)
             analyst.log_outcome(
@@ -475,10 +475,20 @@ def run_bot_forever():
         _cb_capital = 10_000.0
     logger.info(f"Circuit breaker inicializado con capital base: {_cb_capital:,.2f} USDT")
 
+    n_open = len(executor.open_symbols(stocks=False)) + len(executor.open_symbols(stocks=True))
+    alerts.notify_info(
+        f"Bot iniciado — modo {config.TRADING_MODE.upper()} | "
+        f"{len(config.CRYPTO_SYMBOLS)} crypto + {len(config.STOCK_SYMBOLS)} stocks | "
+        f"{n_open} posiciones abiertas" + (" | ⏸ PAUSADO" if is_paused() else "")
+    )
+    last_cycle_error = None
+
     while True:
         try:
             run_cycle(executor, initial_capital=_cb_capital)
             consecutive_fatal = 0
+            last_cycle_error = None
+            backup.maybe_backup()
         except KeyboardInterrupt:
             logger.info("Bot detenido por el usuario.")
             break
@@ -492,6 +502,9 @@ def run_bot_forever():
                 break
         except Exception as e:
             logger.error(f"Error en ciclo: {e}", exc_info=True)
+            if str(e) != last_cycle_error:   # avisar una vez por error distinto
+                last_cycle_error = str(e)
+                alerts.notify_error(f"Error en ciclo: {e}")
 
         logger.info(f"Esperando {config.LOOP_INTERVAL_SECONDS // 60} min...\n")
         time.sleep(config.LOOP_INTERVAL_SECONDS)

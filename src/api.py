@@ -22,7 +22,7 @@ from slowapi.errors import RateLimitExceeded
 
 from src.config import BASE_DIR, CRYPTO_SYMBOLS, STOCK_SYMBOLS, TIMEFRAME, LOOP_INTERVAL_SECONDS
 from src.database import get_session, Trade, Signal as DbSignal, Candle
-from src import analyst, ml_analyst
+from src import analyst, ml_analyst, alerts
 from src.bot import run_bot_forever  # importar aquí para que ccxt/Alpaca se inicialicen antes del lifespan
 
 logger = logging.getLogger("api")
@@ -769,6 +769,7 @@ def pause_bot(request: Request,
     PAUSE_FILE.parent.mkdir(parents=True, exist_ok=True)
     PAUSE_FILE.touch()
     logger.info("Bot pausado vía API")
+    alerts.notify_info("⏸ Bot pausado desde el dashboard (sigue gestionando SL/TP).")
     return {"status": "paused"}
 
 
@@ -787,6 +788,7 @@ def resume_bot(request: Request,
     CB_RESUME_FILE.parent.mkdir(parents=True, exist_ok=True)
     CB_RESUME_FILE.write_text(datetime.now(timezone.utc).isoformat())
     logger.info("Bot reanudado vía API")
+    alerts.notify_info("▶️ Bot reanudado desde el dashboard.")
     return {"status": "running"}
 
 

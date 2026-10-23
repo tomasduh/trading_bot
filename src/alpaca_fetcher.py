@@ -3,6 +3,7 @@ Fetcher para Alpaca Paper Trading (stocks).
 Equivalente a data_fetcher.py pero para acciones US.
 """
 import os
+import time
 import functools
 import logging
 import pandas as pd
@@ -12,7 +13,7 @@ from pathlib import Path
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.enums import OrderSide, OrderStatus, TimeInForce
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest, StockLatestTradeRequest
 from alpaca.data.enums import DataFeed
@@ -170,8 +171,33 @@ def create_market_order(symbol: str, side: str, qty: float) -> dict:
         side=order_side,
         time_in_force=TimeInForce.DAY,
     )
-    order = trading_client.submit_order(req)
-    return {"id": str(order.id), "symbol": symbol, "qty": qty, "side": side}
+    order = _wait_for_fill(trading_client.submit_order(req))
+    if order.status in (OrderStatus.REJECTED, OrderStatus.CANCELED, OrderStatus.EXPIRED):
+        raise RuntimeError(f"orden {side} {symbol} {order.status.value}")
+    return {
+        "id":      str(order.id), "symbol": symbol, "qty": qty, "side": side,
+        "status":  order.status.value,
+        "average": float(order.filled_avg_price) if order.filled_avg_price else None,
+        "filled":  float(order.filled_qty) if order.filled_qty else None,
+    }
+
+
+FILL_TIMEOUT_S = 10.0
+
+
+def _wait_for_fill(order):
+    """Una market order recién enviada suele volver 'accepted' sin precio. Se
+    consulta hasta que esté filled (o termine) para registrar el precio real;
+    si no llega a tiempo se devuelve tal cual y el caller usa su precio de referencia."""
+    deadline = time.monotonic() + FILL_TIMEOUT_S
+    done = (OrderStatus.FILLED, OrderStatus.REJECTED, OrderStatus.CANCELED, OrderStatus.EXPIRED)
+    while order.status not in done and time.monotonic() < deadline:
+        time.sleep(0.5)
+        order = trading_client.get_order_by_id(order.id)
+    if order.status != OrderStatus.FILLED:
+        logger.warning("[%s] orden %s sin fill completo tras %.0fs (status=%s)",
+                       order.symbol, order.id, FILL_TIMEOUT_S, order.status.value)
+    return order
 
 
 def get_open_positions() -> dict:

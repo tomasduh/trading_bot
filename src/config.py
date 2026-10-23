@@ -159,6 +159,7 @@ FEE_PCT: dict = {
     "ETH/USDT": 0.001,
     "SOL/USDT": 0.001,
     "BNB/USDT": 0.001,
+    "XRP/USDT": 0.001,
     # Stocks Alpaca: 0 (comisión cero)
 }
 SLIPPAGE_PCT = 0.0005    # 0.05% estimado conservador por orden (ambos lados)

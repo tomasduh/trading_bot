@@ -4,7 +4,7 @@ Toda acción queda registrada en la base de datos.
 """
 import logging
 from datetime import datetime, timezone
-from src import config, risk_manager, data_fetcher
+from src import config, risk_manager, data_fetcher, alerts
 from src.database import Trade, get_session
 from src.strategy import Signal
 
@@ -33,10 +33,44 @@ def _has_api_credentials_for(symbol: str) -> bool:
     return bool(os.getenv("ALPACA_API_KEY", "").strip())
 
 
+def _avg_price(order: dict) -> float:
+    """Precio promedio de ejecución reportado por el exchange (0 si no vino)."""
+    try:
+        return float(order.get("average") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _buy_fill(symbol: str, order: dict, fallback_price: float,
+              fallback_qty: float) -> tuple[float, float]:
+    """(precio, cantidad neta) realmente ejecutados en un BUY.
+
+    Binance cobra el fee de una compra en el activo comprado (salvo que se pague
+    con BNB): si compramos 0.01 BTC recibimos 0.01 − fee. Guardar 0.01 haría
+    fallar el SELL por saldo insuficiente, así que se descuenta y se redondea al step.
+    """
+    price = _avg_price(order) or fallback_price
+    try:
+        qty = float(order.get("filled") or 0) or fallback_qty
+    except (TypeError, ValueError):
+        qty = fallback_qty
+    if "/" in symbol:
+        base = symbol.split("/")[0]
+        fees = order.get("fees") or ([order["fee"]] if order.get("fee") else [])
+        fee_in_base = sum(float(f.get("cost") or 0) for f in fees
+                          if f and f.get("currency") == base)
+        if fee_in_base:
+            step = risk_manager._get_limits(symbol)["step"]
+            qty = risk_manager._floor_to_step(qty - fee_in_base, step)
+    return price, qty
+
+
 class TradeExecutor:
     def __init__(self):
         # Un trade abierto por símbolo: {"BTC/USDT": Trade | None, ...}
         self._open_trades: dict[str, Trade | None] = {}
+        # Intentos fallidos de cierre por símbolo (para no spamear alertas)
+        self._close_failures: dict[str, int] = {}
         self._load_open_trades()
 
     def _load_open_trades(self):
@@ -110,6 +144,7 @@ class TradeExecutor:
         logger.info(f"[{symbol}] Abriendo BUY {qty} @ {signal.price:,.2f} | SL={sl:,.2f} TP={tp:,.2f}")
 
         order = {}
+        entry_price = signal.price
         if _has_api_credentials_for(symbol):
             fetcher = _get_fetcher_for(symbol)
             try:
@@ -117,18 +152,24 @@ class TradeExecutor:
             except Exception as e:
                 logger.error(f"[{symbol}] Error al ejecutar orden: {e}")
                 return None
+            entry_price, qty = _buy_fill(symbol, order, signal.price, qty)
+            # SL/TP relativos al precio real de ejecución, no al de la señal
+            sl, tp = risk_manager.get_sl_tp(entry_price, atr, symbol)
+            if abs(entry_price - signal.price) / signal.price > 0.001:
+                logger.info(f"[{symbol}] Fill @ {entry_price:,.4f} (señal {signal.price:,.4f}) "
+                            f"qty={qty} | SL={sl:,.2f} TP={tp:,.2f}")
 
         trade = Trade(
             symbol=symbol,
             side="BUY",
             status="OPEN",
-            entry_price=signal.price,
+            entry_price=entry_price,
             quantity=qty,
             stop_loss=sl,
             take_profit=tp,
             entry_time=datetime.now(timezone.utc),
             order_id=str(order.get("id", "simulated")),
-            highest_price=signal.price,   # init para trailing stop
+            highest_price=entry_price,   # init para trailing stop
         )
 
         with get_session() as session:
@@ -148,19 +189,36 @@ class TradeExecutor:
         if not trade:
             return None
 
-        pnl_usdt, pnl_pct = risk_manager.pnl(trade.entry_price, exit_price, trade.quantity)
+        if _has_api_credentials_for(symbol):
+            fetcher = _get_fetcher_for(symbol)
+            try:
+                order = fetcher.create_market_order(symbol, "sell", trade.quantity)
+            except Exception as e:
+                # La posición sigue abierta en el exchange: NO marcarla CLOSED en la
+                # DB (quedaría sin stop y sin que nadie la vea). check_sl_tp vuelve a
+                # disparar el próximo ciclo y se reintenta.
+                n = self._close_failures.get(symbol, 0) + 1
+                self._close_failures[symbol] = n
+                logger.error(f"[{symbol}] Error al cerrar #{trade.id} ({reason}), intento {n}: {e} "
+                             f"— sigue OPEN, se reintenta el próximo ciclo")
+                if n == 1 or n % 6 == 0:   # primera vez y luego ~cada hora
+                    alerts.notify_error(
+                        f"No se pudo cerrar {symbol} #{trade.id} ({reason}), intento {n}: {e}\n"
+                        f"La posición sigue ABIERTA en el exchange; se reintenta cada ciclo."
+                    )
+                return None
+            if self._close_failures.pop(symbol, 0):
+                alerts.notify_info(f"{symbol} #{trade.id} cerrado tras reintentos.")
+            exit_price = _avg_price(order) or exit_price
+
+        # Fees: Alpaca 0; Binance ~0.1% por lado (estimado de config, igual que el backtest)
+        pnl_usdt, pnl_pct = risk_manager.pnl(trade.entry_price, exit_price, trade.quantity,
+                                             fee_pct=config.FEE_PCT.get(symbol, 0.0))
         emoji = "✅" if pnl_usdt >= 0 else "❌"
         logger.info(
             f"[{symbol}] {emoji} Cerrando #{trade.id} @ {exit_price:,.2f} | "
             f"{reason} | PnL: {pnl_usdt:+.2f} USDT ({pnl_pct*100:+.2f}%)"
         )
-
-        if _has_api_credentials_for(symbol):
-            fetcher = _get_fetcher_for(symbol)
-            try:
-                fetcher.create_market_order(symbol, "sell", trade.quantity)
-            except Exception as e:
-                logger.error(f"[{symbol}] Error al cerrar orden: {e}")
 
         with get_session() as session:
             db_trade = session.get(Trade, trade.id)
