@@ -38,8 +38,8 @@ STOCK_SYMBOLS = [
     "AAPL",
     "MSFT",
     "NVDA",
-    "TSLA",
-    "GOOGL",
+    # TSLA/GOOGL quitados 2026-10-23 (ya no interesan). Si quedó un trade abierto,
+    # bot.py lo sigue gestionando (SL/TP/SIGNAL) hasta cerrarlo, sin nuevas entradas.
     "AMZN",
     "META",
     # ETF

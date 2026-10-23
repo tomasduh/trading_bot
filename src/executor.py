@@ -54,6 +54,17 @@ class TradeExecutor:
             for t in open_trades:
                 self._open_trades[t.symbol] = t
 
+    def open_symbols(self, stocks: bool) -> list[str]:
+        """Símbolos (stocks o crypto) con trade abierto, estén o no en config."""
+        return [s for s, t in self._open_trades.items()
+                if t is not None and ("/" not in s) == stocks]
+
+    def legacy_open_symbols(self, stocks: bool) -> list[str]:
+        """Símbolos con trade abierto que ya no están en config (quitados del
+        universo). Hay que seguir chequeando su SL/TP para poder cerrarlos."""
+        configured = set(config.CRYPTO_SYMBOLS) | set(config.STOCK_SYMBOLS)
+        return [s for s in self.open_symbols(stocks) if s not in configured]
+
     def has_open_trade(self, symbol: str) -> bool:
         return self._open_trades.get(symbol) is not None
 

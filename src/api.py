@@ -424,7 +424,7 @@ def _build_status() -> dict:
         open_list = []
         for t in open_trades:
             s.expunge(t)
-            if t.symbol in STOCK_SYMBOLS:
+            if "/" not in t.symbol:   # stock (incluye los ya quitados de config)
                 live = _fetch_stock_price_fallback(t.symbol, allow_blocking=False)
                 current_price = live if live > 0 else _last_known_price(s, t.symbol)
             else:

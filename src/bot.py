@@ -170,11 +170,13 @@ def _extract_ml_features(df_ind, signal, live_price: float) -> dict:
 
 
 def process_market(symbol: str, executor: TradeExecutor, capital: float,
-                   fetcher, label: str = "CRYPTO") -> float:
+                   fetcher, label: str = "CRYPTO", allow_entries: bool = True) -> float:
     """
     Procesa un ciclo de análisis y ejecución para un símbolo (crypto o stock).
     `fetcher` debe tener método fetch_ohlcv(symbol, timeframe).
     `label` es "CRYPTO" o "STOCK" — solo para formato de log.
+    `allow_entries=False` → solo gestiona la salida del trade abierto (símbolos
+    quitados de config); nunca abre uno nuevo.
 
     Devuelve el notional (USDT/USD) comprometido si abrió un trade nuevo, o 0.0.
     El caller (run_cycle) lo resta del capital disponible para el resto del ciclo
@@ -254,7 +256,7 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
                 f"trend={signal.trend} → {signal.reason}"
             )
 
-        if signal.type == "BUY" and not executor.has_open_trade(symbol):
+        if signal.type == "BUY" and allow_entries and not executor.has_open_trade(symbol):
             # ── Cap global de exposición ──────────────────────────────────────
             exposure = executor.total_exposure_pct(capital)
             if exposure >= config.MAX_TOTAL_EXPOSURE_PCT:
@@ -321,6 +323,54 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
     return 0.0
 
 
+def check_exits_only(symbol: str, executor: TradeExecutor, fetcher, label: str = "CRYPTO"):
+    """Solo SL/TP/Trailing del trade abierto — sin evaluar señales ni abrir nada.
+    Se usa con el bot pausado: la pausa frena entradas nuevas, pero las
+    posiciones abiertas no pueden quedar sin stop (antes quedaban días sin
+    vigilancia tras un circuit breaker)."""
+    width = 12 if label == "CRYPTO" else 6
+    try:
+        df = fetcher.fetch_ohlcv(symbol, timeframe=config.TIMEFRAME, limit=config.CANDLES_LIMIT) \
+            if label == "STOCK" else fetcher.fetch_ohlcv(symbol=symbol)
+        if df.empty:
+            logger.warning(f"  {symbol:<{width}} sin datos — SL/TP no chequeado")
+            return
+        live_price = float(df["close"].iloc[-1])
+        trigger = executor.check_sl_tp(symbol, live_price)
+        if not trigger:
+            logger.info(f"  {symbol:<{width}} @ {live_price:>10,.2f} | posición abierta, SL/TP OK")
+            return
+        closed = executor.close_trade(symbol, live_price, trigger)
+        if closed:
+            alerts.notify_trade_closed(symbol, closed.entry_price, live_price,
+                                        closed.pnl_usdt or 0, closed.pnl_pct or 0,
+                                        trigger)
+            analyst.log_outcome(
+                trade_id=closed.id, symbol=symbol,
+                exit_reason=trigger,
+                pnl_pct=closed.pnl_pct or 0,
+                pnl_usdt=closed.pnl_usdt or 0,
+            )
+    except DataFetchError as e:
+        logger.warning(f"  [{symbol}] Error temporal de datos (pausa): {e}")
+    except Exception as e:
+        logger.error(f"  [{symbol}] Error gestionando salida en pausa: {e}", exc_info=True)
+
+
+def manage_exits_while_paused(executor: TradeExecutor):
+    """Recorre todas las posiciones abiertas y aplica solo SL/TP/Trailing."""
+    for symbol in executor.open_symbols(stocks=False):
+        check_exits_only(symbol, executor, data_fetcher, "CRYPTO")
+    stocks = executor.open_symbols(stocks=True)
+    if stocks:
+        try:
+            if alpaca_fetcher.is_market_open():
+                for symbol in stocks:
+                    check_exits_only(symbol, executor, alpaca_fetcher, "STOCK")
+        except Exception as e:
+            logger.warning(f"[STOCKS] Error gestionando salidas en pausa: {e}")
+
+
 def _ping_watchdog():
     """Ping a healthchecks.io al final de cada ciclo exitoso."""
     if not config.HC_PING_URL:
@@ -335,7 +385,9 @@ def _ping_watchdog():
 
 def run_cycle(executor: TradeExecutor, initial_capital: float = 10_000.0):
     if is_paused():
-        logger.info("⏸  Bot pausado (existe data/.paused) — saltando ciclo.")
+        logger.info("⏸  Bot pausado (existe data/.paused) — sin entradas, solo SL/TP de posiciones abiertas.")
+        manage_exits_while_paused(executor)
+        gc.collect()
         return
 
     logger.info("─" * 55)
@@ -350,6 +402,7 @@ def run_cycle(executor: TradeExecutor, initial_capital: float = 10_000.0):
         alerts.notify_error(f"🚨 Circuit breaker: {cb_reason}\nBot pausado automáticamente.")
         PAUSE_FILE.parent.mkdir(parents=True, exist_ok=True)
         PAUSE_FILE.touch()
+        manage_exits_while_paused(executor)
         return
 
     # ── Reconciliación: DB vs exchange ────────────────────────────────────────
@@ -369,6 +422,8 @@ def run_cycle(executor: TradeExecutor, initial_capital: float = 10_000.0):
         available_usdt = usdt_free
         for symbol in config.CRYPTO_SYMBOLS:
             available_usdt -= process_market(symbol, executor, available_usdt, data_fetcher, "CRYPTO")
+        for symbol in executor.legacy_open_symbols(stocks=False):
+            process_market(symbol, executor, 0.0, data_fetcher, "CRYPTO", allow_entries=False)
     except DataFetchError as e:
         logger.warning(f"[CRYPTO] No se pudo obtener balance: {e}")
     gc.collect()   # liberar DataFrames de crypto antes de procesar stocks
@@ -382,6 +437,8 @@ def run_cycle(executor: TradeExecutor, initial_capital: float = 10_000.0):
             available_usd = usd_free
             for symbol in config.STOCK_SYMBOLS:
                 available_usd -= process_market(symbol, executor, available_usd, alpaca_fetcher, "STOCK")
+            for symbol in executor.legacy_open_symbols(stocks=True):
+                process_market(symbol, executor, 0.0, alpaca_fetcher, "STOCK", allow_entries=False)
         else:
             logger.info("[STOCKS] Mercado cerrado — esperando apertura (9:30 ET)")
     except Exception as e:
