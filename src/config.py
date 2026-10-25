@@ -135,7 +135,8 @@ MTF_TIMEFRAME   = "4h"        # timeframe macro para confirmación de tendencia
 # Acelerado: 8% permite hasta ~8 trades simultáneos (RISK_PER_TRADE=1% cada uno)
 # en lugar de 5. Con 17 símbolos disponibles, este es el verdadero limitador
 # de cuántos trades pueden coexistir y permite aprovechar más oportunidades.
-MAX_TOTAL_EXPOSURE_PCT = 0.15  # 15% máximo del capital en riesgo simultáneo
+MAX_TOTAL_EXPOSURE_PCT = 0.15  # 15% máximo en riesgo simultáneo, por mercado (crypto y stocks
+                               # se miden cada uno contra su cuenta: cash libre + nocional abierto)
 
 # ── ATR-based stops (Fase 2.1) ────────────────────────────────────────────────
 # Si USE_ATR_STOPS=True: SL y TP se calculan como múltiplos del ATR en lugar

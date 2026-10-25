@@ -90,8 +90,7 @@ class TradeExecutor:
 
     def open_symbols(self, stocks: bool) -> list[str]:
         """Símbolos (stocks o crypto) con trade abierto, estén o no en config."""
-        return [s for s, t in self._open_trades.items()
-                if t is not None and ("/" not in s) == stocks]
+        return [t.symbol for t in self._open_trades_of(stocks)]
 
     def legacy_open_symbols(self, stocks: bool) -> list[str]:
         """Símbolos con trade abierto que ya no están en config (quitados del
@@ -105,21 +104,35 @@ class TradeExecutor:
     def get_open_trade(self, symbol: str) -> Trade | None:
         return self._open_trades.get(symbol)
 
-    def total_exposure_pct(self, capital: float) -> float:
+    def _open_trades_of(self, stocks: bool) -> list[Trade]:
+        return [t for s, t in self._open_trades.items()
+                if t is not None and ("/" not in s) == stocks]
+
+    def open_notional(self, stocks: bool) -> float:
+        """Nocional (a precio de entrada) de las posiciones abiertas de un mercado."""
+        return sum((t.entry_price or 0) * (t.quantity or 0) for t in self._open_trades_of(stocks))
+
+    def total_exposure_pct(self, free_cash: float, stocks: bool) -> float:
         """
-        Calcula el % del capital actualmente en riesgo en todos los trades abiertos.
+        % del capital de UN mercado (crypto en Binance o stocks en Alpaca) en riesgo
+        en sus trades abiertos. Cada mercado es una cuenta distinta: mezclarlos
+        hacía que el riesgo de los stocks (~$70k) dividido por el USDT libre
+        bloqueara las entradas crypto.
 
         Riesgo por trade = (entry_price - stop_loss) × quantity
         → es el importe máximo que se perdería si todos los SL se activan hoy.
+        Capital del mercado = cash libre + nocional abierto (a precio de entrada):
+        así no se infla a medida que el cash se invierte.
 
-        Se usa para bloquear nuevas entradas cuando la exposición global
+        Se usa para bloquear nuevas entradas cuando la exposición
         supera MAX_TOTAL_EXPOSURE_PCT (config.py).
         """
+        capital = free_cash + self.open_notional(stocks)
         if capital <= 0:
             return 0.0
         open_risk = sum(
             max(0.0, (t.entry_price - (t.stop_loss or 0)) * (t.quantity or 0))
-            for t in self._open_trades.values() if t
+            for t in self._open_trades_of(stocks)
         )
         return open_risk / capital
 

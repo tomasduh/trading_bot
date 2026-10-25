@@ -257,11 +257,11 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
             )
 
         if signal.type == "BUY" and allow_entries and not executor.has_open_trade(symbol):
-            # ── Cap global de exposición ──────────────────────────────────────
-            exposure = executor.total_exposure_pct(capital)
+            # ── Cap de exposición del mercado (crypto y stocks por separado) ──
+            exposure = executor.total_exposure_pct(capital, stocks=(label == "STOCK"))
             if exposure >= config.MAX_TOTAL_EXPOSURE_PCT:
                 logger.warning(
-                    f"  {symbol:<{width}} BUY bloqueado — exposición global "
+                    f"  {symbol:<{width}} BUY bloqueado — exposición {label.lower()} "
                     f"{exposure*100:.1f}% ≥ {config.MAX_TOTAL_EXPOSURE_PCT*100:.0f}%"
                 )
             elif capital > 10:

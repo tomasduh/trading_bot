@@ -36,6 +36,33 @@ def test_legacy_open_symbols_only_returns_unconfigured_open_trades():
     assert ex.legacy_open_symbols(stocks=False) == ["ADA/USDT"]
 
 
+def _trade(symbol, entry, sl, qty):
+    return Trade(symbol=symbol, side="BUY", status="OPEN",
+                 entry_price=entry, stop_loss=sl, quantity=qty)
+
+
+def test_exposure_is_measured_per_market():
+    """Caso visto en prod: ~$70k en stocks bloqueaban entradas crypto con $7.9k USDT."""
+    ex = _executor_with({
+        "AAPL":     _trade("AAPL", 350.0, 343.0, 200),        # $70k nocional, riesgo $1,400
+        "BTC/USDT": _trade("BTC/USDT", 80_000.0, 78_400.0, 0.025),  # $2k nocional, riesgo $40
+    })
+    crypto = ex.total_exposure_pct(7_930.0, stocks=False)
+    stocks = ex.total_exposure_pct(30_000.0, stocks=True)
+
+    assert crypto == pytest.approx(40 / (7_930 + 2_000))
+    assert stocks == pytest.approx(1_400 / (30_000 + 70_000))
+    assert crypto < config.MAX_TOTAL_EXPOSURE_PCT       # crypto ya no queda bloqueado
+
+
+def test_exposure_does_not_inflate_as_cash_gets_invested():
+    """El capital es cash libre + nocional abierto: invertir no cambia el denominador."""
+    ex = _executor_with({"ETH/USDT": _trade("ETH/USDT", 2_000.0, 1_960.0, 1.0)})
+    # 10k de cuenta: 8k libres + 2k invertidos → riesgo $40 sobre $10k
+    assert ex.total_exposure_pct(8_000.0, stocks=False) == pytest.approx(40 / 10_000)
+    assert ex.total_exposure_pct(8_000.0, stocks=True) == 0.0
+
+
 # ── Órdenes reales simuladas ──────────────────────────────────────────────────
 
 @pytest.fixture
