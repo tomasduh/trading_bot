@@ -183,3 +183,30 @@ def test_alpaca_cancel_waits_until_released(monkeypatch):
     monkeypatch.setattr(alpaca_fetcher.time, "sleep", lambda s: None)
 
     assert alpaca_fetcher.cancel_protection("AAPL", "abc-123") == {"state": "canceled"}
+
+
+def test_alpaca_fractional_position_gets_day_stop(monkeypatch):
+    sent = []
+    monkeypatch.setattr(alpaca_fetcher.trading_client, "submit_order",
+                        lambda req: sent.append(req) or SimpleNamespace(id="stop-1"))
+
+    alpaca_fetcher.place_protection("MSFT", 0.0376, stop_price=520.3812, take_profit=552.24)
+
+    req = sent[0]
+    assert req.type == OrderType.STOP and req.time_in_force == TimeInForce.DAY
+    assert req.order_class is None and req.qty == 0.0376 and req.stop_price == 520.38
+
+
+def test_alpaca_expired_day_stop_reports_expired():
+    orders = [_order(OrderType.STOP, OrderStatus.EXPIRED)]
+    assert alpaca_fetcher._oco_status(orders) == {"state": "expired"}
+    orders = [_order(OrderType.STOP, OrderStatus.DONE_FOR_DAY)]
+    assert alpaca_fetcher._oco_status(orders) == {"state": "expired"}
+
+
+def test_alpaca_minutes_to_open(monkeypatch):
+    from datetime import datetime, timezone, timedelta
+    now = datetime(2026, 10, 26, 13, 5, tzinfo=timezone.utc)
+    monkeypatch.setattr(alpaca_fetcher.trading_client, "get_clock", lambda: SimpleNamespace(
+        is_open=False, timestamp=now, next_open=now + timedelta(minutes=25)))
+    assert alpaca_fetcher.minutes_to_open() == pytest.approx(25)

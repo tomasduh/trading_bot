@@ -12,8 +12,8 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import (MarketOrderRequest, LimitOrderRequest, TakeProfitRequest,
-                                     StopLossRequest, GetOrderByIdRequest)
+from alpaca.trading.requests import (MarketOrderRequest, LimitOrderRequest, StopOrderRequest,
+                                     TakeProfitRequest, StopLossRequest, GetOrderByIdRequest)
 from alpaca.trading.enums import OrderClass, OrderSide, OrderStatus, OrderType, TimeInForce
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest, StockLatestTradeRequest
@@ -201,37 +201,71 @@ def _wait_for_fill(order):
     return order
 
 
-# ── Protección del lado del exchange (OCO de venta GTC) ──────────────────────
-# Take-profit limit + stop a mercado. Queda vivo en Alpaca aunque el bot esté
-# caído o pausado; el stop a mercado se ejecuta aunque el precio abra con gap.
+# ── Protección del lado del exchange ──────────────────────────────────────────
+# Acciones enteras: OCO de venta GTC (TP limit + stop a mercado). Queda viva en
+# Alpaca aunque el bot esté caído o pausado; el stop se ejecuta aunque abra con gap.
+# Fracciones: Alpaca solo acepta órdenes DAY y sin OCO → stop a mercado DAY que el
+# bot renueva cada sesión (en cola antes de la apertura); el TP lo ejecuta el bot.
 
 _ORDER_DONE = (OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED,
                OrderStatus.REPLACED, OrderStatus.DONE_FOR_DAY)
+_ORDER_EXPIRED = (OrderStatus.EXPIRED, OrderStatus.DONE_FOR_DAY)
 CANCEL_TIMEOUT_S = 5.0
+
+_fractionable_cache: dict[str, bool] = {}
+
+
+def is_fractionable(symbol: str) -> bool:
+    if symbol not in _fractionable_cache:
+        asset = trading_client.get_asset(symbol)
+        _fractionable_cache[symbol] = bool(asset.fractionable and asset.tradable)
+    return _fractionable_cache[symbol]
+
+
+def _is_whole(qty: float) -> bool:
+    return abs(qty - round(qty)) < 1e-9
 
 
 def place_protection(symbol: str, qty: float, stop_price: float, take_profit: float) -> str:
-    """Coloca una OCO de venta sobre una posición abierta. Devuelve el id de la orden padre."""
-    req = LimitOrderRequest(
-        symbol=symbol, qty=qty, side=OrderSide.SELL,
-        time_in_force=TimeInForce.GTC, order_class=OrderClass.OCO,
-        take_profit=TakeProfitRequest(limit_price=round(take_profit, 2)),
-        stop_loss=StopLossRequest(stop_price=round(stop_price, 2)),
-    )
+    """Coloca la protección de una posición abierta y devuelve el id de la orden:
+    OCO GTC si la cantidad es entera, stop DAY si es fraccionaria."""
+    if _is_whole(qty):
+        req = LimitOrderRequest(
+            symbol=symbol, qty=round(qty), side=OrderSide.SELL,
+            time_in_force=TimeInForce.GTC, order_class=OrderClass.OCO,
+            take_profit=TakeProfitRequest(limit_price=round(take_profit, 2)),
+            stop_loss=StopLossRequest(stop_price=round(stop_price, 2)),
+        )
+    else:
+        req = StopOrderRequest(
+            symbol=symbol, qty=qty, side=OrderSide.SELL,
+            time_in_force=TimeInForce.DAY, stop_price=round(stop_price, 2),
+        )
     return str(trading_client.submit_order(req).id)
 
 
 def _oco_status(orders: list) -> dict:
-    """{"state": "open"|"filled"|"canceled", "reason", "exit_price"} de la orden
-    padre + sus legs (una es el limit del TP, la otra el stop)."""
+    """{"state": "open"|"filled"|"canceled"|"expired", "reason", "exit_price"} de
+    la orden de protección y sus legs (OCO: limit del TP + stop; fracción: solo stop)."""
     for o in orders:
         if o.status == OrderStatus.FILLED:
             reason = "TAKE_PROFIT" if o.type == OrderType.LIMIT else "STOP_LOSS"
             return {"state": "filled", "reason": reason,
                     "exit_price": float(o.filled_avg_price)}
     if all(o.status in _ORDER_DONE for o in orders):
+        # DAY vencida al cierre (o GTC a los 90 días): normal, se repone
+        if any(o.status in _ORDER_EXPIRED for o in orders):
+            return {"state": "expired"}
         return {"state": "canceled"}
     return {"state": "open"}
+
+
+def minutes_to_open() -> float:
+    """Minutos hasta la próxima apertura (0 si el mercado está abierto)."""
+    clock = trading_client.get_clock()
+    if clock.is_open:
+        return 0.0
+    return (clock.next_open - clock.timestamp).total_seconds() / 60
 
 
 def get_protection_status(symbol: str, order_id: str) -> dict:
@@ -240,8 +274,9 @@ def get_protection_status(symbol: str, order_id: str) -> dict:
 
 
 def cancel_protection(symbol: str, order_id: str) -> dict:
-    """Cancela la OCO y espera a que Alpaca libere las acciones (si no, el SELL
-    siguiente se rechaza por qty retenida). Si ya se había ejecutado, devuelve 'filled'."""
+    """Cancela la protección (OCO o stop DAY) y espera a que Alpaca libere las
+    acciones (si no, el SELL siguiente se rechaza por qty retenida). Si ya se
+    había ejecutado, devuelve 'filled'."""
     try:
         trading_client.cancel_order_by_id(order_id)
     except Exception as e:

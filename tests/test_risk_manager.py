@@ -1,5 +1,6 @@
 """Tests para risk_manager incluyendo el nuevo trailing stop."""
 import sys
+import pytest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -121,6 +122,23 @@ def test_position_size_stocks_integer_shares():
     """Para stocks, qty debe ser entero."""
     qty = risk_manager.position_size(10_000, 280, "AAPL")
     assert qty == int(qty), f"AAPL qty debe ser entera, obtuvo {qty}"
+
+
+def test_position_size_never_forces_a_whole_share_over_the_cap():
+    """$100 de capital: 1 MSFT ($531) supera el 20% por posición → no compra."""
+    assert risk_manager.position_size(100, 531.0, "MSFT") == 0
+
+
+def test_position_size_fractional_when_one_share_is_too_much():
+    qty = risk_manager.position_size(100, 531.0, "MSFT", fractional=True)
+    assert qty == pytest.approx(0.0376)                  # $20 / $531, floor a 4 decimales
+    assert qty * 531.0 <= 100 * config.MAX_POSITION_PCT_OF_CAPITAL
+
+
+def test_position_size_fractional_mode_keeps_whole_shares_when_affordable():
+    """Si alcanza para ≥1 acción se compran enteras (para que lleven OCO GTC)."""
+    qty = risk_manager.position_size(10_000, 280.0, "AAPL", fractional=True)
+    assert qty == 7                                       # $2000 / $280 = 7.14 → 7
 
 
 def test_signal_exit_loss_buffer_active():

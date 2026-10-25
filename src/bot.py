@@ -323,21 +323,51 @@ def manage_exits(symbol: str, executor: TradeExecutor, live_price: float) -> boo
         if trigger:
             closed = executor.close_trade(symbol, live_price, trigger)
     if closed:
-        alerts.notify_trade_closed(symbol, closed.entry_price, closed.exit_price,
-                                    closed.pnl_usdt or 0, closed.pnl_pct or 0,
-                                    closed.exit_reason)
-        # Feature logging: registrar outcome del trade
-        analyst.log_outcome(
-            trade_id=closed.id, symbol=symbol,
-            exit_reason=closed.exit_reason,
-            pnl_pct=closed.pnl_pct or 0,
-            pnl_usdt=closed.pnl_usdt or 0,
-        )
+        _notify_closed(symbol, closed)
         return True
     if trigger:
         return True     # cierre fallido: se reintenta el próximo ciclo
     executor.ensure_protection(symbol)
     return False
+
+
+def _notify_closed(symbol: str, closed):
+    alerts.notify_trade_closed(symbol, closed.entry_price, closed.exit_price,
+                                closed.pnl_usdt or 0, closed.pnl_pct or 0,
+                                closed.exit_reason)
+    # Feature logging: registrar outcome del trade
+    analyst.log_outcome(
+        trade_id=closed.id, symbol=symbol,
+        exit_reason=closed.exit_reason,
+        pnl_pct=closed.pnl_pct or 0,
+        pnl_usdt=closed.pnl_usdt or 0,
+    )
+
+
+PREOPEN_WINDOW_MIN = 30
+
+
+def prepare_stock_protection_preopen(executor: TradeExecutor):
+    """Con el mercado cerrado y la apertura a ≤30 min: renueva los stops DAY de
+    las posiciones fraccionarias (vencieron al cierre anterior) y repone OCO
+    faltantes, para que el stop esté en el exchange desde el primer print y no
+    recién en el primer ciclo con mercado abierto. Si Alpaca no lo acepta antes
+    de abrir, se coloca en ese primer ciclo (ahí sí con alerta si falla)."""
+    symbols = executor.open_symbols(stocks=True)
+    if not symbols:
+        return
+    try:
+        if alpaca_fetcher.minutes_to_open() > PREOPEN_WINDOW_MIN:
+            return
+    except Exception as e:
+        logger.warning(f"[STOCKS] No se pudo consultar el reloj de mercado: {e}")
+        return
+    for symbol in symbols:
+        closed = executor.sync_protection(symbol)
+        if closed:
+            _notify_closed(symbol, closed)
+        else:
+            executor.ensure_protection(symbol, alert=False)
 
 
 def check_exits_only(symbol: str, executor: TradeExecutor, fetcher, label: str = "CRYPTO"):
@@ -371,6 +401,8 @@ def manage_exits_while_paused(executor: TradeExecutor):
             if alpaca_fetcher.is_market_open():
                 for symbol in stocks:
                     check_exits_only(symbol, executor, alpaca_fetcher, "STOCK")
+            else:
+                prepare_stock_protection_preopen(executor)
         except Exception as e:
             logger.warning(f"[STOCKS] Error gestionando salidas en pausa: {e}")
 
@@ -445,6 +477,7 @@ def run_cycle(executor: TradeExecutor, initial_capital: float = 10_000.0):
                 process_market(symbol, executor, 0.0, alpaca_fetcher, "STOCK", allow_entries=False)
         else:
             logger.info("[STOCKS] Mercado cerrado — esperando apertura (9:30 ET)")
+            prepare_stock_protection_preopen(executor)
     except Exception as e:
         logger.warning(f"[STOCKS] Error: {e}")
 

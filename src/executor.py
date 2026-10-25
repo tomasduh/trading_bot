@@ -33,6 +33,17 @@ def _has_api_credentials_for(symbol: str) -> bool:
     return bool(os.getenv("ALPACA_API_KEY", "").strip())
 
 
+def _stock_fractional(symbol: str) -> bool:
+    """¿Se puede comprar este stock en fracciones? (config + asset fractionable en Alpaca)"""
+    if "/" in symbol or not config.STOCK_FRACTIONAL or not _has_api_credentials_for(symbol):
+        return False
+    try:
+        return bool(_get_fetcher_for(symbol).is_fractionable(symbol))
+    except Exception as e:
+        logger.warning(f"[{symbol}] No se pudo verificar si es fraccionable: {e} — acciones enteras")
+        return False
+
+
 def _avg_price(order: dict) -> float:
     """Precio promedio de ejecución reportado por el exchange (0 si no vino)."""
     try:
@@ -145,7 +156,8 @@ class TradeExecutor:
             logger.warning(f"[{symbol}] Ya hay trade abierto. Ignorando BUY.")
             return None
 
-        qty = risk_manager.position_size(capital_usdt, signal.price, symbol)
+        qty = risk_manager.position_size(capital_usdt, signal.price, symbol,
+                                         fractional=_stock_fractional(symbol))
         atr = getattr(signal, "atr", 0.0) or 0.0
         sl, tp = risk_manager.get_sl_tp(signal.price, atr, symbol)
 
@@ -211,9 +223,10 @@ class TradeExecutor:
                 db_trade.protect_order_id = order_id
                 session.commit()
 
-    def ensure_protection(self, symbol: str):
-        """Coloca la OCO si el trade abierto no tiene una (trade nuevo, trades
-        previos a esta feature, o una OCO cancelada fuera del bot)."""
+    def ensure_protection(self, symbol: str, alert: bool = True):
+        """Coloca la protección si el trade abierto no tiene una (trade nuevo, trades
+        previos a esta feature, stop DAY vencido, o una OCO cancelada fuera del bot).
+        alert=False: intento oportunista (antes de la apertura), un fallo solo se loguea."""
         trade = self._open_trades.get(symbol)
         if not trade or trade.protect_order_id or not _has_api_credentials_for(symbol):
             return
@@ -222,6 +235,9 @@ class TradeExecutor:
         try:
             order_id = _get_fetcher_for(symbol).place_protection(symbol, trade.quantity, sl, tp)
         except Exception as e:
+            if not alert:
+                logger.info(f"[{symbol}] Protección de #{trade.id} no colocada todavía: {e}")
+                return
             if symbol not in self._protect_failures:   # avisar una vez, reintentar cada ciclo
                 self._protect_failures.add(symbol)
                 logger.warning(f"[{symbol}] No se pudo colocar la OCO de #{trade.id}: {e} "
@@ -233,7 +249,7 @@ class TradeExecutor:
             self._protect_failures.discard(symbol)
             alerts.notify_info(f"{symbol} #{trade.id} ya tiene su stop en el exchange.")
         self._set_protect_id(trade, order_id)
-        logger.info(f"[{symbol}] 🛡 OCO #{order_id} en exchange | SL={sl:,.4f} TP={tp:,.4f}")
+        logger.info(f"[{symbol}] 🛡 Protección #{order_id} en exchange | qty={trade.quantity} SL={sl:,.4f} TP={tp:,.4f}")
 
     def sync_protection(self, symbol: str) -> Trade | None:
         """Si la OCO se ejecutó en el exchange, registra el cierre con ese fill y
@@ -248,8 +264,12 @@ class TradeExecutor:
             return None
         if status["state"] == "filled":
             return self._record_close(trade, status["exit_price"], status["reason"])
-        if status["state"] == "canceled":
-            logger.warning(f"[{symbol}] OCO #{trade.protect_order_id} cancelada fuera del bot — se repone")
+        if status["state"] == "expired":
+            # Stop DAY de una fracción al cierre (o GTC a los 90 días): esperado
+            logger.info(f"[{symbol}] Protección #{trade.protect_order_id} vencida — se renueva")
+            self._set_protect_id(trade, None)
+        elif status["state"] == "canceled":
+            logger.warning(f"[{symbol}] Protección #{trade.protect_order_id} cancelada fuera del bot — se repone")
             self._set_protect_id(trade, None)
         return None
 

@@ -109,6 +109,12 @@ MAX_OPEN_TRADES = 1          # máximo 1 posición abierta por símbolo
 # trade independientemente del ratio riesgo/stop, relevante sobre todo a capital bajo.
 MAX_POSITION_PCT_OF_CAPITAL = 0.20   # ningún trade individual supera 20% del capital
 
+# Acciones fraccionarias en Alpaca: con capital chico (ej. $100 → $20 por trade)
+# ninguna acción entera entra en el 20%. Si alcanza para ≥1 acción se compran
+# enteras (con OCO GTC en el exchange); si no, la fracción (con stop DAY renovado
+# cada sesión y TP gestionado por el bot). Solo para assets fractionable en Alpaca.
+STOCK_FRACTIONAL = True
+
 # Trailing stop: el optimizer demostró que con SL 2% / TP 4% el TS corta trades
 # prematuramente. Desactivado tras backtest 90d × 4 símbolos (variante F ganadora).
 USE_TRAILING_STOP   = False

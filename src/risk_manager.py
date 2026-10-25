@@ -31,13 +31,15 @@ _SYMBOL_LIMITS = {
 }
 # Stocks: shares enteras
 _STOCK_DEFAULT = {"step": 1.0, "min_qty": 1.0, "min_notional": 1.0, "price_decimals": 2}
+# Fracciones (Alpaca): mínimo $1 por orden; 4 decimales de qty sobran.
+_STOCK_FRACTIONAL = {"step": 0.0001, "min_qty": 0.0001, "min_notional": 1.0, "price_decimals": 2}
 
 
-def _get_limits(symbol: str) -> dict:
+def _get_limits(symbol: str, fractional: bool = False) -> dict:
     if "/" in symbol:
         return _SYMBOL_LIMITS.get(symbol, {"step": 0.001, "min_qty": 0.001,
                                           "min_notional": 5.0, "price_decimals": 2})
-    return _STOCK_DEFAULT
+    return _STOCK_FRACTIONAL if fractional else _STOCK_DEFAULT
 
 
 def _floor_to_step(qty: float, step: float) -> float:
@@ -50,8 +52,13 @@ def _floor_to_step(qty: float, step: float) -> float:
     return n * step
 
 
-def position_size(capital_usdt: float, entry_price: float, symbol: str | None = None) -> float:
-    """Cantidad a comprar respetando los límites del símbolo (step, min_qty, min_notional)."""
+def position_size(capital_usdt: float, entry_price: float, symbol: str | None = None,
+                  fractional: bool = False) -> float:
+    """Cantidad a comprar respetando los límites del símbolo (step, min_qty, min_notional).
+
+    fractional (solo stocks): si alcanza para ≥1 acción se compran ENTERAS (así la
+    posición lleva OCO GTC en el exchange); solo si no alcanza para una se compra
+    la fracción (protegida con stop DAY). Ver alpaca_fetcher.place_protection."""
     risk_usdt = capital_usdt * config.RISK_PER_TRADE
     loss_per_unit = entry_price * config.STOP_LOSS_PCT
     if loss_per_unit <= 0:
@@ -64,13 +71,19 @@ def position_size(capital_usdt: float, entry_price: float, symbol: str | None = 
         max_qty_by_capital = (capital_usdt * config.MAX_POSITION_PCT_OF_CAPITAL) / entry_price
         qty_raw = min(qty_raw, max_qty_by_capital)
 
-    limits = _get_limits(symbol) if symbol else _SYMBOL_LIMITS["BTC/USDT"]
+    if not symbol:
+        limits = _SYMBOL_LIMITS["BTC/USDT"]
+    else:
+        limits = _get_limits(symbol, fractional=fractional and qty_raw < 1)
     step       = limits["step"]
     min_qty    = limits["min_qty"]
     min_notional = limits["min_notional"]
 
     qty = _floor_to_step(qty_raw, step)
-    qty = max(qty, min_qty)
+    # Antes se subía a min_qty: con capital chico eso compraba 1 acción entera
+    # aunque superara MAX_POSITION_PCT_OF_CAPITAL (ej. $100 → 1 MSFT de $531).
+    if qty < min_qty:
+        return 0.0
 
     # Verificar minNotional: si qty * price < min_notional, qty queda en 0 (no operable)
     if qty * entry_price < min_notional:

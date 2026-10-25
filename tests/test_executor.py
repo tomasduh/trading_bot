@@ -99,6 +99,8 @@ def live(monkeypatch, tmp_path):
         exchange.calls.append("cancel")
         return dict(exchange.cancel_result)
 
+    exchange.fractionable = True
+    exchange.is_fractionable = lambda symbol: exchange.fractionable
     exchange.create_market_order = create_market_order
     exchange.place_protection = place_protection
     exchange.get_protection_status = get_protection_status
@@ -285,3 +287,48 @@ def test_protection_failure_alerts_once_then_recovers(live):
     live.ex.ensure_protection("BTC/USDT")
     assert _db_trade(live, t.id).protect_order_id == "oco-1"
     assert live.sent.infos                            # avisa que ya quedó protegida
+
+
+
+# ── Acciones fraccionarias ────────────────────────────────────────────────────
+
+def test_small_capital_buys_a_fraction_and_protects_it(live):
+    """$100 de capital: 20% = $20 → 0.0376 MSFT, con su stop en el exchange."""
+    live.exchange.response = {"average": 531.0, "filled": 0.0376}
+    signal = SimpleNamespace(price=531.0, atr=0.0, reason="test")
+
+    trade = live.ex.open_trade("MSFT", signal, capital_usdt=100)
+
+    assert live.exchange.orders == [("MSFT", "buy", 0.0376)]
+    assert trade.quantity == pytest.approx(0.0376)
+    (sym, qty, sl, tp), = live.exchange.protections
+    assert qty == pytest.approx(0.0376)
+
+
+def test_non_fractionable_stock_with_small_capital_is_skipped(live):
+    live.exchange.fractionable = False
+    signal = SimpleNamespace(price=531.0, atr=0.0, reason="test")
+
+    assert live.ex.open_trade("MSFT", signal, capital_usdt=100) is None
+    assert live.exchange.orders == []        # nunca 1 acción entera fuera del 20%
+
+
+def test_expired_day_stop_is_renewed_without_alert(live):
+    t = _open(live, symbol="MSFT", entry=531.0, qty=0.0376, protect_id="stop-1")
+    live.exchange.status = {"state": "expired"}
+
+    assert live.ex.sync_protection("MSFT") is None
+    live.ex.ensure_protection("MSFT")
+
+    assert _db_trade(live, t.id).protect_order_id == "oco-1"
+    assert live.sent.errors == []
+
+
+def test_preopen_attempt_failure_is_silent(live):
+    _open(live, symbol="MSFT", entry=531.0, qty=0.0376)
+    live.exchange.protect_fail = True
+
+    live.ex.ensure_protection("MSFT", alert=False)
+
+    assert live.sent.errors == []
+    assert "MSFT" not in live.ex._protect_failures   # en horario sí alertará

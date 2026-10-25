@@ -25,8 +25,8 @@ class FakeExecutor:
     def sync_protection(self, symbol):
         return None             # sin OCO ejecutada en el exchange
 
-    def ensure_protection(self, symbol):
-        self.protected.append(symbol)
+    def ensure_protection(self, symbol, alert=True):
+        self.protected.append((symbol, alert))
 
     def check_sl_tp(self, symbol, price):
         self.checked.append(symbol)
@@ -38,10 +38,11 @@ class FakeExecutor:
                                exit_reason=reason, pnl_usdt=-1.0, pnl_pct=-0.02)
 
 
-def _fetcher(price: float, market_open: bool = True):
+def _fetcher(price: float, market_open: bool = True, minutes_to_open: float = 600):
     df = pd.DataFrame({"close": [price, price]})
     return SimpleNamespace(fetch_ohlcv=lambda *a, **k: df,
-                           is_market_open=lambda: market_open)
+                           is_market_open=lambda: market_open,
+                           minutes_to_open=lambda: 0 if market_open else minutes_to_open)
 
 
 @pytest.fixture
@@ -66,7 +67,7 @@ def test_paused_bot_still_closes_on_stop_loss(paused):
 
     assert sorted(ex.checked) == ["AAPL", "BTC/USDT", "TSLA"]
     assert sorted(ex.closed) == [("BTC/USDT", "STOP_LOSS"), ("TSLA", "STOP_LOSS")]
-    assert ex.protected == ["AAPL"]      # la que sigue abierta asegura su OCO
+    assert ex.protected == [("AAPL", True)]   # la que sigue abierta asegura su OCO
 
 
 def test_paused_bot_skips_stocks_when_market_closed(paused):
@@ -78,3 +79,19 @@ def test_paused_bot_skips_stocks_when_market_closed(paused):
 
     assert ex.checked == ["BTC/USDT"]
     assert ex.closed == []
+
+
+def test_paused_bot_queues_stock_stops_shortly_before_open(paused):
+    """A ≤30 min de la apertura se renuevan los stops DAY (sin alertar si Alpaca
+    todavía no los acepta); fuera de esa ventana no se toca nada."""
+    paused.setattr(bot, "data_fetcher", _fetcher(95.0))
+    ex = FakeExecutor({"AAPL": 340.0, "MSFT": 530.0}, {})
+
+    paused.setattr(bot, "alpaca_fetcher", _fetcher(300.0, market_open=False, minutes_to_open=120))
+    bot.run_cycle(ex)
+    assert ex.protected == []
+
+    paused.setattr(bot, "alpaca_fetcher", _fetcher(300.0, market_open=False, minutes_to_open=20))
+    bot.run_cycle(ex)
+    assert sorted(ex.protected) == [("AAPL", False), ("MSFT", False)]
+    assert ex.checked == []                  # sin precio en vivo: no evalúa SL/TP
