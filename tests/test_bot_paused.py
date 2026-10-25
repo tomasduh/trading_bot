@@ -17,10 +17,16 @@ class FakeExecutor:
     def __init__(self, open_trades: dict, triggers: dict):
         self.open_trades = open_trades     # {symbol: entry_price}
         self.triggers = triggers           # {symbol: "STOP_LOSS" | None}
-        self.checked, self.closed = [], []
+        self.checked, self.closed, self.protected = [], [], []
 
     def open_symbols(self, stocks: bool) -> list[str]:
         return [s for s in self.open_trades if ("/" not in s) == stocks]
+
+    def sync_protection(self, symbol):
+        return None             # sin OCO ejecutada en el exchange
+
+    def ensure_protection(self, symbol):
+        self.protected.append(symbol)
 
     def check_sl_tp(self, symbol, price):
         self.checked.append(symbol)
@@ -28,8 +34,8 @@ class FakeExecutor:
 
     def close_trade(self, symbol, price, reason):
         self.closed.append((symbol, reason))
-        return SimpleNamespace(id=1, entry_price=self.open_trades[symbol],
-                               pnl_usdt=-1.0, pnl_pct=-0.02)
+        return SimpleNamespace(id=1, entry_price=self.open_trades[symbol], exit_price=price,
+                               exit_reason=reason, pnl_usdt=-1.0, pnl_pct=-0.02)
 
 
 def _fetcher(price: float, market_open: bool = True):
@@ -60,6 +66,7 @@ def test_paused_bot_still_closes_on_stop_loss(paused):
 
     assert sorted(ex.checked) == ["AAPL", "BTC/USDT", "TSLA"]
     assert sorted(ex.closed) == [("BTC/USDT", "STOP_LOSS"), ("TSLA", "STOP_LOSS")]
+    assert ex.protected == ["AAPL"]      # la que sigue abierta asegura su OCO
 
 
 def test_paused_bot_skips_stocks_when_market_closed(paused):

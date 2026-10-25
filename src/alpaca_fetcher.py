@@ -12,8 +12,9 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest
-from alpaca.trading.enums import OrderSide, OrderStatus, TimeInForce
+from alpaca.trading.requests import (MarketOrderRequest, LimitOrderRequest, TakeProfitRequest,
+                                     StopLossRequest, GetOrderByIdRequest)
+from alpaca.trading.enums import OrderClass, OrderSide, OrderStatus, OrderType, TimeInForce
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest, StockLatestTradeRequest
 from alpaca.data.enums import DataFeed
@@ -198,6 +199,59 @@ def _wait_for_fill(order):
         logger.warning("[%s] orden %s sin fill completo tras %.0fs (status=%s)",
                        order.symbol, order.id, FILL_TIMEOUT_S, order.status.value)
     return order
+
+
+# ── Protección del lado del exchange (OCO de venta GTC) ──────────────────────
+# Take-profit limit + stop a mercado. Queda vivo en Alpaca aunque el bot esté
+# caído o pausado; el stop a mercado se ejecuta aunque el precio abra con gap.
+
+_ORDER_DONE = (OrderStatus.CANCELED, OrderStatus.EXPIRED, OrderStatus.REJECTED,
+               OrderStatus.REPLACED, OrderStatus.DONE_FOR_DAY)
+CANCEL_TIMEOUT_S = 5.0
+
+
+def place_protection(symbol: str, qty: float, stop_price: float, take_profit: float) -> str:
+    """Coloca una OCO de venta sobre una posición abierta. Devuelve el id de la orden padre."""
+    req = LimitOrderRequest(
+        symbol=symbol, qty=qty, side=OrderSide.SELL,
+        time_in_force=TimeInForce.GTC, order_class=OrderClass.OCO,
+        take_profit=TakeProfitRequest(limit_price=round(take_profit, 2)),
+        stop_loss=StopLossRequest(stop_price=round(stop_price, 2)),
+    )
+    return str(trading_client.submit_order(req).id)
+
+
+def _oco_status(orders: list) -> dict:
+    """{"state": "open"|"filled"|"canceled", "reason", "exit_price"} de la orden
+    padre + sus legs (una es el limit del TP, la otra el stop)."""
+    for o in orders:
+        if o.status == OrderStatus.FILLED:
+            reason = "TAKE_PROFIT" if o.type == OrderType.LIMIT else "STOP_LOSS"
+            return {"state": "filled", "reason": reason,
+                    "exit_price": float(o.filled_avg_price)}
+    if all(o.status in _ORDER_DONE for o in orders):
+        return {"state": "canceled"}
+    return {"state": "open"}
+
+
+def get_protection_status(symbol: str, order_id: str) -> dict:
+    order = trading_client.get_order_by_id(order_id, filter=GetOrderByIdRequest(nested=True))
+    return _oco_status([order] + list(order.legs or []))
+
+
+def cancel_protection(symbol: str, order_id: str) -> dict:
+    """Cancela la OCO y espera a que Alpaca libere las acciones (si no, el SELL
+    siguiente se rechaza por qty retenida). Si ya se había ejecutado, devuelve 'filled'."""
+    try:
+        trading_client.cancel_order_by_id(order_id)
+    except Exception as e:
+        logger.info("[%s] cancelar OCO %s: %s (¿ya ejecutada?)", symbol, order_id, e)
+    deadline = time.monotonic() + CANCEL_TIMEOUT_S
+    while True:
+        status = get_protection_status(symbol, order_id)
+        if status["state"] != "open" or time.monotonic() >= deadline:
+            return status
+        time.sleep(0.5)
 
 
 def get_open_positions() -> dict:

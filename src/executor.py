@@ -71,6 +71,8 @@ class TradeExecutor:
         self._open_trades: dict[str, Trade | None] = {}
         # Intentos fallidos de cierre por símbolo (para no spamear alertas)
         self._close_failures: dict[str, int] = {}
+        # Símbolos cuya OCO no se pudo colocar (para alertar una sola vez)
+        self._protect_failures: set[str] = set()
         self._load_open_trades()
 
     def _load_open_trades(self):
@@ -193,7 +195,63 @@ class TradeExecutor:
 
         self._open_trades[symbol] = trade
         logger.info(f"[{symbol}] Trade #{trade.id} abierto.")
+        self.ensure_protection(symbol)
         return trade
+
+    # ── Protección del lado del exchange (OCO SL/TP) ──────────────────────────
+    # El SL/TP vive como orden OCO en el exchange: se ejecuta aunque el bot esté
+    # caído o pausado, y sin esperar al próximo ciclo. check_sl_tp del bot queda
+    # como respaldo (OCO rechazada, o trailing stop que la OCO no sigue).
+
+    def _set_protect_id(self, trade: Trade, order_id: str | None):
+        trade.protect_order_id = order_id
+        with get_session() as session:
+            db_trade = session.get(Trade, trade.id)
+            if db_trade:
+                db_trade.protect_order_id = order_id
+                session.commit()
+
+    def ensure_protection(self, symbol: str):
+        """Coloca la OCO si el trade abierto no tiene una (trade nuevo, trades
+        previos a esta feature, o una OCO cancelada fuera del bot)."""
+        trade = self._open_trades.get(symbol)
+        if not trade or trade.protect_order_id or not _has_api_credentials_for(symbol):
+            return
+        sl = trade.stop_loss or risk_manager.stop_loss_price(trade.entry_price, symbol)
+        tp = trade.take_profit or risk_manager.take_profit_price(trade.entry_price, symbol)
+        try:
+            order_id = _get_fetcher_for(symbol).place_protection(symbol, trade.quantity, sl, tp)
+        except Exception as e:
+            if symbol not in self._protect_failures:   # avisar una vez, reintentar cada ciclo
+                self._protect_failures.add(symbol)
+                logger.warning(f"[{symbol}] No se pudo colocar la OCO de #{trade.id}: {e} "
+                               f"— queda el SL/TP del bot como respaldo")
+                alerts.notify_error(f"{symbol} #{trade.id} SIN stop en el exchange: {e}\n"
+                                    f"El bot sigue vigilando SL/TP cada ciclo; se reintenta.")
+            return
+        if symbol in self._protect_failures:
+            self._protect_failures.discard(symbol)
+            alerts.notify_info(f"{symbol} #{trade.id} ya tiene su stop en el exchange.")
+        self._set_protect_id(trade, order_id)
+        logger.info(f"[{symbol}] 🛡 OCO #{order_id} en exchange | SL={sl:,.4f} TP={tp:,.4f}")
+
+    def sync_protection(self, symbol: str) -> Trade | None:
+        """Si la OCO se ejecutó en el exchange, registra el cierre con ese fill y
+        devuelve el trade cerrado. Si alguien la canceló, la olvida para reponerla."""
+        trade = self._open_trades.get(symbol)
+        if not trade or not trade.protect_order_id:
+            return None
+        try:
+            status = _get_fetcher_for(symbol).get_protection_status(symbol, trade.protect_order_id)
+        except Exception as e:
+            logger.warning(f"[{symbol}] No se pudo consultar la OCO #{trade.protect_order_id}: {e}")
+            return None
+        if status["state"] == "filled":
+            return self._record_close(trade, status["exit_price"], status["reason"])
+        if status["state"] == "canceled":
+            logger.warning(f"[{symbol}] OCO #{trade.protect_order_id} cancelada fuera del bot — se repone")
+            self._set_protect_id(trade, None)
+        return None
 
     # ── Cierre ────────────────────────────────────────────────────────────────
 
@@ -205,6 +263,16 @@ class TradeExecutor:
         if _has_api_credentials_for(symbol):
             fetcher = _get_fetcher_for(symbol)
             try:
+                if trade.protect_order_id:
+                    # La OCO retiene las unidades: hay que cancelarla antes de vender.
+                    status = fetcher.cancel_protection(symbol, trade.protect_order_id)
+                    if status["state"] == "filled":
+                        # El exchange cerró primero: vale su fill, no hay nada que vender
+                        return self._record_close(trade, status["exit_price"], status["reason"])
+                    if status["state"] == "open":
+                        raise RuntimeError(f"la OCO #{trade.protect_order_id} no se pudo cancelar")
+                    # Si el SELL falla, ensure_protection repone la OCO el próximo ciclo
+                    self._set_protect_id(trade, None)
                 order = fetcher.create_market_order(symbol, "sell", trade.quantity)
             except Exception as e:
                 # La posición sigue abierta en el exchange: NO marcarla CLOSED en la
@@ -220,10 +288,15 @@ class TradeExecutor:
                         f"La posición sigue ABIERTA en el exchange; se reintenta cada ciclo."
                     )
                 return None
-            if self._close_failures.pop(symbol, 0):
-                alerts.notify_info(f"{symbol} #{trade.id} cerrado tras reintentos.")
             exit_price = _avg_price(order) or exit_price
 
+        return self._record_close(trade, exit_price, reason)
+
+    def _record_close(self, trade: Trade, exit_price: float, reason: str) -> Trade:
+        """Marca el trade CLOSED en DB con el precio de salida real."""
+        symbol = trade.symbol
+        if self._close_failures.pop(symbol, 0):
+            alerts.notify_info(f"{symbol} #{trade.id} cerrado tras reintentos.")
         # Fees: Alpaca 0; Binance ~0.1% por lado (estimado de config, igual que el backtest)
         pnl_usdt, pnl_pct = risk_manager.pnl(trade.entry_price, exit_price, trade.quantity,
                                              fee_pct=config.FEE_PCT.get(symbol, 0.0))
@@ -241,6 +314,7 @@ class TradeExecutor:
             db_trade.pnl_usdt   = pnl_usdt
             db_trade.pnl_pct    = pnl_pct
             db_trade.exit_reason = reason
+            db_trade.protect_order_id = None
             session.commit()
             session.refresh(db_trade)
             session.expunge(db_trade)

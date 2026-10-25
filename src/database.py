@@ -104,6 +104,7 @@ class Trade(Base):
     exit_reason = Column(String)                # "STOP_LOSS" | "TAKE_PROFIT" | "SIGNAL" | "TRAILING_STOP" | "MANUAL"
     order_id = Column(String)
     highest_price = Column(Float)               # para trailing stop: precio máximo alcanzado
+    protect_order_id = Column(String)           # OCO SL/TP viva en el exchange (None = sin protección)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
 
@@ -115,6 +116,9 @@ def _migrate_add_columns():
             cols = [r[1] for r in conn.exec_driver_sql("PRAGMA table_info(trades)").fetchall()]
             if "highest_price" not in cols:
                 conn.exec_driver_sql("ALTER TABLE trades ADD COLUMN highest_price FLOAT")
+                conn.commit()
+            if "protect_order_id" not in cols:
+                conn.exec_driver_sql("ALTER TABLE trades ADD COLUMN protect_order_id VARCHAR")
                 conn.commit()
         except Exception:
             pass   # tabla no existe aún, create_all la creará completa

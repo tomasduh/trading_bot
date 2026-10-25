@@ -207,21 +207,8 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
 
         persist_candle(symbol, df_ind)
 
-        # 1. Chequear SL/TP/Trailing
-        trigger = executor.check_sl_tp(symbol, live_price)
-        if trigger:
-            closed = executor.close_trade(symbol, live_price, trigger)
-            if closed:
-                alerts.notify_trade_closed(symbol, closed.entry_price, closed.exit_price,
-                                            closed.pnl_usdt or 0, closed.pnl_pct or 0,
-                                            trigger)
-                # Feature logging: registrar outcome del trade
-                analyst.log_outcome(
-                    trade_id=closed.id, symbol=symbol,
-                    exit_reason=trigger,
-                    pnl_pct=closed.pnl_pct or 0,
-                    pnl_usdt=closed.pnl_usdt or 0,
-                )
+        # 1. OCO del exchange + SL/TP/Trailing del bot
+        if manage_exits(symbol, executor, live_price):
             analyst.log_cycle(live_price, ind_snap, strategy.evaluate(df_ind),
                               trade_action="CLOSED", symbol=symbol)
             return 0.0
@@ -302,11 +289,11 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
                 acted = True
                 alerts.notify_trade_closed(symbol, closed.entry_price, closed.exit_price,
                                             closed.pnl_usdt or 0, closed.pnl_pct or 0,
-                                            "SIGNAL")
+                                            closed.exit_reason)
                 # Feature logging: outcome
                 analyst.log_outcome(
                     trade_id=closed.id, symbol=symbol,
-                    exit_reason="SIGNAL",
+                    exit_reason=closed.exit_reason,
                     pnl_pct=closed.pnl_pct or 0,
                     pnl_usdt=closed.pnl_usdt or 0,
                 )
@@ -323,6 +310,36 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
     return 0.0
 
 
+def manage_exits(symbol: str, executor: TradeExecutor, live_price: float) -> bool:
+    """Salidas del trade abierto, en orden:
+      1. ¿La OCO del exchange ya cerró la posición? → registrar ese fill.
+      2. SL/TP/Trailing del bot (respaldo) → cancelar OCO y vender a mercado.
+      3. Si sigue abierto sin OCO (trade viejo, OCO cancelada) → colocarla.
+    Devuelve True si hubo cierre o intento de cierre en este ciclo."""
+    closed = executor.sync_protection(symbol)
+    trigger = None
+    if not closed:
+        trigger = executor.check_sl_tp(symbol, live_price)
+        if trigger:
+            closed = executor.close_trade(symbol, live_price, trigger)
+    if closed:
+        alerts.notify_trade_closed(symbol, closed.entry_price, closed.exit_price,
+                                    closed.pnl_usdt or 0, closed.pnl_pct or 0,
+                                    closed.exit_reason)
+        # Feature logging: registrar outcome del trade
+        analyst.log_outcome(
+            trade_id=closed.id, symbol=symbol,
+            exit_reason=closed.exit_reason,
+            pnl_pct=closed.pnl_pct or 0,
+            pnl_usdt=closed.pnl_usdt or 0,
+        )
+        return True
+    if trigger:
+        return True     # cierre fallido: se reintenta el próximo ciclo
+    executor.ensure_protection(symbol)
+    return False
+
+
 def check_exits_only(symbol: str, executor: TradeExecutor, fetcher, label: str = "CRYPTO"):
     """Solo SL/TP/Trailing del trade abierto — sin evaluar señales ni abrir nada.
     Se usa con el bot pausado: la pausa frena entradas nuevas, pero las
@@ -336,21 +353,8 @@ def check_exits_only(symbol: str, executor: TradeExecutor, fetcher, label: str =
             logger.warning(f"  {symbol:<{width}} sin datos — SL/TP no chequeado")
             return
         live_price = float(df["close"].iloc[-1])
-        trigger = executor.check_sl_tp(symbol, live_price)
-        if not trigger:
+        if not manage_exits(symbol, executor, live_price):
             logger.info(f"  {symbol:<{width}} @ {live_price:>10,.2f} | posición abierta, SL/TP OK")
-            return
-        closed = executor.close_trade(symbol, live_price, trigger)
-        if closed:
-            alerts.notify_trade_closed(symbol, closed.entry_price, closed.exit_price,
-                                        closed.pnl_usdt or 0, closed.pnl_pct or 0,
-                                        trigger)
-            analyst.log_outcome(
-                trade_id=closed.id, symbol=symbol,
-                exit_reason=trigger,
-                pnl_pct=closed.pnl_pct or 0,
-                pnl_usdt=closed.pnl_usdt or 0,
-            )
     except DataFetchError as e:
         logger.warning(f"  [{symbol}] Error temporal de datos (pausa): {e}")
     except Exception as e:
