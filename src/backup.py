@@ -39,7 +39,7 @@ def maybe_backup(now: datetime | None = None) -> bool:
     MARKER_FILE.write_text(today)
 
     snap = config.DB_PATH.with_name("backup_snapshot.db")
-    gz = config.DB_PATH.with_name(f"trades-{today}.db.gz")
+    gz = config.DB_PATH.with_name(f"{config.DB_PATH.stem}-{today}.db.gz")
     try:
         src = sqlite3.connect(config.DB_PATH)
         dst = sqlite3.connect(snap)
@@ -56,7 +56,7 @@ def maybe_backup(now: datetime | None = None) -> bool:
             alerts.notify_error(f"Backup diario no enviado: {size/1e6:.1f}MB supera el límite "
                                 f"de Telegram. Queda el snapshot de Fly; hay que podar la DB.")
             return False
-        ok = alerts.send_document(gz, caption=f"🗄 Backup trades.db {today} ({size/1e6:.1f}MB)")
+        ok = alerts.send_document(gz, caption=f"🗄 Backup {config.DB_PATH.name} {today} ({size/1e6:.1f}MB)")
         if ok:
             logger.info(f"Backup diario enviado a Telegram ({size/1e6:.1f}MB)")
         else:

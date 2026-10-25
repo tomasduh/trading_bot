@@ -4,9 +4,36 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-# ── Entorno ──────────────────────────────────────────────────────────────────
-TRADING_MODE = os.getenv("TRADING_MODE", "testnet")  # "testnet" | "live"
-IS_TESTNET = TRADING_MODE == "testnet"
+# ── Entorno: modo por exchange ───────────────────────────────────────────────
+#   BINANCE_MODE: "testnet" | "live" | "off"     ALPACA_MODE: "paper" | "live" | "off"
+#   "off" = no abre trades nuevos en ese exchange (sí gestiona la salida de los
+#   que hayan quedado abiertos). Así se puede pasar a live de a un exchange.
+# TRADING_MODE es el nombre viejo y solo define BINANCE_MODE si este no está seteado.
+TRADING_MODE = os.getenv("TRADING_MODE", "testnet")
+BINANCE_MODE = os.getenv("BINANCE_MODE", "live" if TRADING_MODE == "live" else "testnet").lower()
+ALPACA_MODE  = os.getenv("ALPACA_MODE", "paper").lower()
+if BINANCE_MODE not in ("testnet", "live", "off"):
+    raise ValueError(f"BINANCE_MODE inválido: {BINANCE_MODE!r} (testnet|live|off)")
+if ALPACA_MODE not in ("paper", "live", "off"):
+    raise ValueError(f"ALPACA_MODE inválido: {ALPACA_MODE!r} (paper|live|off)")
+
+# Dinero real y paper no se mezclan en una misma corrida (DB, circuit breaker y
+# PnL serían inconsistentes): si un exchange está en live, el que esté en
+# paper/testnet se fuerza a "off" y se avisa al arrancar.
+IS_LIVE = "live" in (BINANCE_MODE, ALPACA_MODE)
+MODE_WARNINGS: list[str] = []
+if IS_LIVE and BINANCE_MODE == "testnet":
+    BINANCE_MODE = "off"
+    MODE_WARNINGS.append("BINANCE_MODE=testnet con Alpaca en live → Binance forzado a off")
+if IS_LIVE and ALPACA_MODE == "paper":
+    ALPACA_MODE = "off"
+    MODE_WARNINGS.append("ALPACA_MODE=paper con Binance en live → Alpaca forzado a off")
+IS_TESTNET = BINANCE_MODE != "live"   # sandbox de ccxt (también con Binance off)
+
+
+def mode_label() -> str:
+    return f"{'LIVE' if IS_LIVE else 'PAPER'} (Binance {BINANCE_MODE}, Alpaca {ALPACA_MODE})"
+
 
 # ── Credenciales ─────────────────────────────────────────────────────────────
 if IS_TESTNET:
@@ -15,6 +42,22 @@ if IS_TESTNET:
 else:
     API_KEY = os.getenv("BINANCE_API_KEY", "")
     API_SECRET = os.getenv("BINANCE_SECRET", "")
+
+# Alpaca: claves distintas para live, para que nunca se opere real con las de paper
+ALPACA_PAPER = ALPACA_MODE != "live"
+if ALPACA_PAPER:
+    ALPACA_API_KEY    = os.getenv("ALPACA_API_KEY", "").strip()
+    ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "").strip()
+else:
+    ALPACA_API_KEY    = os.getenv("ALPACA_LIVE_API_KEY", "").strip()
+    ALPACA_SECRET_KEY = os.getenv("ALPACA_LIVE_SECRET_KEY", "").strip()
+
+# ── Tope de capital por exchange ─────────────────────────────────────────────
+# El bot opera como si la cuenta tuviera como máximo este capital (0 = sin tope).
+# Sirve para ensayar en paper con el tamaño real de live ($100) y como techo de
+# seguridad en live. Ver src/budget.py.
+BINANCE_CAPITAL_CAP = float(os.getenv("BINANCE_CAPITAL_CAP", "0") or 0)
+ALPACA_CAPITAL_CAP  = float(os.getenv("ALPACA_CAPITAL_CAP", "0") or 0)
 
 # ── Pares y timeframe ────────────────────────────────────────────────────────
 CRYPTO_SYMBOLS = [
@@ -123,7 +166,9 @@ TRAILING_DISTANCE_PCT = 0.01
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent.parent
-DB_PATH = BASE_DIR / "data" / "trades.db"
+# DB separada para dinero real: los trades de paper/testnet nunca se cargan
+# como posiciones abiertas en live (ni cuentan en su circuit breaker).
+DB_PATH = BASE_DIR / "data" / ("trades_live.db" if IS_LIVE else "trades.db")
 LOG_DIR = BASE_DIR / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 

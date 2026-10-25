@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from src import config, data_fetcher, strategy, logger as log_setup
 from src.database import init_db, Candle, Signal as DbSignal, get_session
 from src.executor import TradeExecutor
-from src import indicators, analyst, alerts, reconciler, backup
+from src import indicators, analyst, alerts, reconciler, backup, budget
 from src import alpaca_fetcher
 from src.circuit_breaker import get_breaker
 from src.data_fetcher import DataFetchError, FatalDataFetchError
@@ -407,6 +407,37 @@ def manage_exits_while_paused(executor: TradeExecutor):
             logger.warning(f"[STOCKS] Error gestionando salidas en pausa: {e}")
 
 
+def _cap_note(stocks: bool, available: float) -> str:
+    c = budget.cap(stocks)
+    return f" | tope ${c:,.0f} → disponible ${available:,.2f}" if c > 0 else ""
+
+
+def total_capital(executor: TradeExecutor) -> float:
+    """Capital total para el circuit breaker: suma de los exchanges activos (no
+    "off"), cada uno con su tope si lo tiene. Sin tope: Binance = USDT (libre +
+    en órdenes) + nocional abierto en crypto; Alpaca = equity. 0 si no se pudo
+    calcular (el breaker usa entonces su propio cálculo)."""
+    total = 0.0
+    if config.BINANCE_MODE != "off":
+        if budget.cap(False) > 0:
+            total += budget.cap(False)
+        else:
+            try:
+                b = data_fetcher.fetch_balance()
+                total += float(b.get("free", {}).get("USDT", 0) or 0) +                          float(b.get("used", {}).get("USDT", 0) or 0) +                          executor.open_notional(stocks=False)
+            except Exception as e:
+                logger.warning(f"[CB] Balance Binance falló: {e}")
+    if config.ALPACA_MODE != "off":
+        if budget.cap(True) > 0:
+            total += budget.cap(True)
+        else:
+            try:
+                total += float(alpaca_fetcher.trading_client.get_account().equity or 0)
+            except Exception as e:
+                logger.warning(f"[CB] Balance Alpaca falló: {e}")
+    return total
+
+
 def _ping_watchdog():
     """Ping a healthchecks.io al final de cada ciclo exitoso."""
     if not config.HC_PING_URL:
@@ -432,7 +463,7 @@ def run_cycle(executor: TradeExecutor, initial_capital: float = 10_000.0):
     # Evalúa condiciones de riesgo antes de operar. Si se activa, pausa el bot
     # tocando PAUSE_FILE (igual que /api/pause) y notifica por alerts.
     breaker = get_breaker(initial_capital)
-    should_pause, cb_reason = breaker.check()
+    should_pause, cb_reason = breaker.check(total_capital(executor))
     if should_pause:
         logger.critical(f"🚨 CIRCUIT BREAKER activado: {cb_reason}")
         alerts.notify_error(f"🚨 Circuit breaker: {cb_reason}\nBot pausado automáticamente.")
@@ -447,39 +478,50 @@ def run_cycle(executor: TradeExecutor, initial_capital: float = 10_000.0):
     reconciler.reconcile_all(executor)
 
     # ── Crypto ───────────────────────────────────────────────────────────────
-    try:
-        balance = data_fetcher.fetch_balance()
-        usdt_free = float(balance.get("free", {}).get("USDT", 0))
-        logger.info(f"[CRYPTO] Balance USDT: {usdt_free:,.2f}")
-        # Se descuenta lo comprometido por cada símbolo dentro del mismo ciclo:
-        # sin esto, dos señales BUY en el mismo ciclo sizean ambas contra el
-        # balance de ANTES del ciclo, pudiendo pedir en conjunto más notional
-        # del que realmente queda libre en la cuenta.
-        available_usdt = usdt_free
-        for symbol in config.CRYPTO_SYMBOLS:
-            available_usdt -= process_market(symbol, executor, available_usdt, data_fetcher, "CRYPTO")
-        for symbol in executor.legacy_open_symbols(stocks=False):
-            process_market(symbol, executor, 0.0, data_fetcher, "CRYPTO", allow_entries=False)
-    except DataFetchError as e:
-        logger.warning(f"[CRYPTO] No se pudo obtener balance: {e}")
-    gc.collect()   # liberar DataFrames de crypto antes de procesar stocks
+    # BINANCE_MODE=off: no abre nada, pero sigue gestionando la salida de lo abierto.
+    crypto_on = config.BINANCE_MODE != "off"
+    if crypto_on or executor.open_symbols(stocks=False):
+        try:
+            if crypto_on:
+                balance = data_fetcher.fetch_balance()
+                usdt_free = float(balance.get("free", {}).get("USDT", 0))
+                # Con tope (ensayo/techo de seguridad) el bot ve como máximo ese capital.
+                # Se descuenta lo comprometido por cada símbolo dentro del mismo ciclo:
+                # sin esto, dos señales BUY en el mismo ciclo sizean ambas contra el
+                # balance de ANTES del ciclo, pudiendo pedir en conjunto más notional
+                # del que realmente queda libre en la cuenta.
+                available_usdt = executor.available_capital(usdt_free, stocks=False)
+                logger.info(f"[CRYPTO] Balance USDT: {usdt_free:,.2f}" + _cap_note(False, available_usdt))
+                for symbol in config.CRYPTO_SYMBOLS:
+                    available_usdt -= process_market(symbol, executor, available_usdt, data_fetcher, "CRYPTO")
+            exits_only = executor.legacy_open_symbols(stocks=False) if crypto_on                 else executor.open_symbols(stocks=False)
+            for symbol in exits_only:
+                process_market(symbol, executor, 0.0, data_fetcher, "CRYPTO", allow_entries=False)
+        except DataFetchError as e:
+            logger.warning(f"[CRYPTO] No se pudo obtener balance: {e}")
+        gc.collect()   # liberar DataFrames de crypto antes de procesar stocks
 
     # ── Stocks ───────────────────────────────────────────────────────────────
-    try:
-        if alpaca_fetcher.is_market_open():
-            bal = alpaca_fetcher.fetch_balance()
-            usd_free = bal["free"]["USD"]
-            logger.info(f"[STOCKS] Mercado abierto | Cash: ${usd_free:,.2f}")
-            available_usd = usd_free
-            for symbol in config.STOCK_SYMBOLS:
-                available_usd -= process_market(symbol, executor, available_usd, alpaca_fetcher, "STOCK")
-            for symbol in executor.legacy_open_symbols(stocks=True):
-                process_market(symbol, executor, 0.0, alpaca_fetcher, "STOCK", allow_entries=False)
-        else:
-            logger.info("[STOCKS] Mercado cerrado — esperando apertura (9:30 ET)")
-            prepare_stock_protection_preopen(executor)
-    except Exception as e:
-        logger.warning(f"[STOCKS] Error: {e}")
+    stocks_on = config.ALPACA_MODE != "off"
+    if stocks_on or executor.open_symbols(stocks=True):
+        try:
+            if alpaca_fetcher.is_market_open():
+                if stocks_on:
+                    bal = alpaca_fetcher.fetch_balance()
+                    usd_free = bal["free"]["USD"]
+                    available_usd = executor.available_capital(usd_free, stocks=True)
+                    logger.info(f"[STOCKS] Mercado abierto | Cash sin margen: ${usd_free:,.2f}"
+                                + _cap_note(True, available_usd))
+                    for symbol in config.STOCK_SYMBOLS:
+                        available_usd -= process_market(symbol, executor, available_usd, alpaca_fetcher, "STOCK")
+                exits_only = executor.legacy_open_symbols(stocks=True) if stocks_on                     else executor.open_symbols(stocks=True)
+                for symbol in exits_only:
+                    process_market(symbol, executor, 0.0, alpaca_fetcher, "STOCK", allow_entries=False)
+            else:
+                logger.info("[STOCKS] Mercado cerrado — esperando apertura (9:30 ET)")
+                prepare_stock_protection_preopen(executor)
+        except Exception as e:
+            logger.warning(f"[STOCKS] Error: {e}")
 
     # ── Watchdog ping ─────────────────────────────────────────────────────────
     _ping_watchdog()
@@ -494,7 +536,9 @@ def run_bot_forever():
     (asyncio.to_thread) dentro del proceso de uvicorn, eliminando el segundo
     proceso Python que saturaba la VM 512MB."""
     logger.info("=" * 55)
-    logger.info(f"Bot iniciando — modo: {config.TRADING_MODE.upper()}")
+    logger.info(f"Bot iniciando — modo: {config.mode_label()} | DB: {config.DB_PATH.name}")
+    for w in config.MODE_WARNINGS:
+        logger.warning(f"⚠ {w}")
     logger.info(f"Crypto: {', '.join(config.CRYPTO_SYMBOLS)}")
     logger.info(f"Stocks: {', '.join(config.STOCK_SYMBOLS)} (solo horario mercado)")
     logger.info(f"Timeframe: {config.TIMEFRAME}")
@@ -505,19 +549,23 @@ def run_bot_forever():
     executor = TradeExecutor()
     consecutive_fatal = 0
 
-    # Capital inicial para el circuit breaker (crypto USDT + stocks USD)
-    try:
-        _cb_capital = float(data_fetcher.fetch_balance().get("free", {}).get("USDT", 10_000))
-    except Exception:
-        _cb_capital = 10_000.0
-    logger.info(f"Circuit breaker inicializado con capital base: {_cb_capital:,.2f} USDT")
+    # Capital del circuit breaker: suma de exchanges activos (con tope si lo hay).
+    # Se recalcula en cada ciclo; este valor es solo el fallback.
+    _cb_capital = total_capital(executor) or 10_000.0
+    logger.info(f"Circuit breaker: capital total ${_cb_capital:,.2f}")
 
+    caps = [f"{name} ${budget.cap(st):,.0f}" for name, st in (("Binance", False), ("Alpaca", True))
+            if budget.cap(st) > 0]
     n_open = len(executor.open_symbols(stocks=False)) + len(executor.open_symbols(stocks=True))
     alerts.notify_info(
-        f"Bot iniciado — modo {config.TRADING_MODE.upper()} | "
+        f"Bot iniciado — {config.mode_label()} | "
         f"{len(config.CRYPTO_SYMBOLS)} crypto + {len(config.STOCK_SYMBOLS)} stocks | "
-        f"{n_open} posiciones abiertas" + (" | ⏸ PAUSADO" if is_paused() else "")
+        f"{n_open} posiciones abiertas"
+        + (f" | tope: {', '.join(caps)} (desde {budget.since():%Y-%m-%d %H:%M} UTC)" if caps else "")
+        + (" | ⏸ PAUSADO" if is_paused() else "")
     )
+    for w in config.MODE_WARNINGS:
+        alerts.notify_error(w)
     last_cycle_error = None
 
     while True:

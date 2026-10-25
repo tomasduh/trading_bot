@@ -30,11 +30,13 @@ MAX_STALENESS_MINUTES = 60
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-API_KEY    = os.getenv("ALPACA_API_KEY", "")
-SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
-BASE_URL   = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+from src import config
 
-trading_client = TradingClient(API_KEY, SECRET_KEY, paper=True)
+# Claves y endpoint según ALPACA_MODE (paper usa ALPACA_API_KEY, live ALPACA_LIVE_API_KEY)
+API_KEY    = config.ALPACA_API_KEY
+SECRET_KEY = config.ALPACA_SECRET_KEY
+
+trading_client = TradingClient(API_KEY, SECRET_KEY, paper=config.ALPACA_PAPER)
 data_client    = StockHistoricalDataClient(API_KEY, SECRET_KEY)
 
 # alpaca-py no expone un parámetro de timeout: internamente hace
@@ -147,11 +149,19 @@ def get_latest_trade_price(symbol: str) -> float | None:
 
 
 def fetch_balance() -> dict:
+    """free.USD = lo que el bot puede usar SIN margen: min(cash, buying power no
+    marginable). Alpaca abre todas las cuentas como margen; con < $2,000 el
+    multiplicador es 1, pero en paper (o con más capital) buying_power incluye
+    apalancamiento y el bot nunca debe usarlo."""
     account = trading_client.get_account()
+    cash = float(account.cash or 0)
+    nmbp = account.non_marginable_buying_power
+    free = min(cash, float(nmbp)) if nmbp is not None else cash
     return {
         "free": {
-            "USD": float(account.cash),
+            "USD": max(0.0, free),
         },
+        "cash": cash,
         "buying_power": float(account.buying_power),
         "portfolio_value": float(account.portfolio_value),
     }

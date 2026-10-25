@@ -20,7 +20,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from src import config
+from src import config, budget
 from src.database import Trade, get_session
 
 logger = logging.getLogger("circuit_breaker")
@@ -93,21 +93,25 @@ class CircuitBreaker:
             return self.initial_capital
         return total
 
-    def check(self) -> tuple[bool, str]:
+    def check(self, capital: float | None = None) -> tuple[bool, str]:
         """Evalúa todas las condiciones de pausa.
+
+        capital: capital total de los exchanges activos (bot.total_capital: con
+        tope si lo hay). Si no se pasa, se calcula de los balances.
 
         Returns
         ───────
         (should_pause: bool, reason: str)
         """
         try:
-            trades = self._load_recent_trades()
+            # Con tope de capital, los trades previos al tope no cuentan (budget.py)
+            trades = [t for t in self._load_recent_trades() if budget.counts(t)]
         except Exception as e:
             logger.warning(f"[CB] Error leyendo trades: {e}")
             return False, ""
 
-        # Capital base combinado (Binance USDT + Alpaca USD)
-        capital = self._combined_capital()
+        if not capital or capital <= 0:
+            capital = self._combined_capital()
 
         # ── Condición 1: Drawdown diario ─────────────────────────────────────
         today_start = datetime.now(timezone.utc).replace(

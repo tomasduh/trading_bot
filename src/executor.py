@@ -4,7 +4,7 @@ Toda acción queda registrada en la base de datos.
 """
 import logging
 from datetime import datetime, timezone
-from src import config, risk_manager, data_fetcher, alerts
+from src import config, risk_manager, data_fetcher, alerts, budget
 from src.database import Trade, get_session
 from src.strategy import Signal
 
@@ -28,9 +28,8 @@ def _has_api_credentials_for(symbol: str) -> bool:
     """¿Hay credenciales válidas para operar este símbolo?"""
     if "/" in symbol:
         return bool(config.API_KEY)
-    # Stocks: chequea credenciales de Alpaca
-    import os
-    return bool(os.getenv("ALPACA_API_KEY", "").strip())
+    # Stocks: credenciales de Alpaca del modo activo (paper o live)
+    return bool(config.ALPACA_API_KEY)
 
 
 def _stock_fractional(symbol: str) -> bool:
@@ -121,9 +120,18 @@ class TradeExecutor:
         return [t for s, t in self._open_trades.items()
                 if t is not None and ("/" not in s) == stocks]
 
+    def _budget_trades(self, stocks: bool) -> list[Trade]:
+        """Trades abiertos que consumen el capital del mercado (con tope activo,
+        los anteriores al tope se gestionan pero no cuentan — ver budget.py)."""
+        return [t for t in self._open_trades_of(stocks) if budget.counts(t)]
+
     def open_notional(self, stocks: bool) -> float:
         """Nocional (a precio de entrada) de las posiciones abiertas de un mercado."""
-        return sum((t.entry_price or 0) * (t.quantity or 0) for t in self._open_trades_of(stocks))
+        return sum((t.entry_price or 0) * (t.quantity or 0) for t in self._budget_trades(stocks))
+
+    def available_capital(self, real_free: float, stocks: bool) -> float:
+        """Cash que el bot puede usar en un mercado: el real, limitado por el tope."""
+        return budget.available(real_free, stocks, self.open_notional(stocks))
 
     def total_exposure_pct(self, free_cash: float, stocks: bool) -> float:
         """
@@ -145,7 +153,7 @@ class TradeExecutor:
             return 0.0
         open_risk = sum(
             max(0.0, (t.entry_price - (t.stop_loss or 0)) * (t.quantity or 0))
-            for t in self._open_trades_of(stocks)
+            for t in self._budget_trades(stocks)
         )
         return open_risk / capital
 
