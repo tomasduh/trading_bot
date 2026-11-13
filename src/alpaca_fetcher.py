@@ -132,6 +132,36 @@ def fetch_ohlcv(symbol: str, timeframe: str = "15m", limit: int = 200) -> pd.Dat
     return df
 
 
+def fetch_daily(symbol: str, limit: int = 260) -> pd.DataFrame:
+    """Velas DIARIAS ajustadas por splits/dividendos para la estrategia diaria.
+
+    No reusa fetch_ohlcv: su `limit` hace que Alpaca devuelva las velas MÁS VIEJAS
+    del rango, y sin ajuste un split rompe la SMA200. Pide el feed consolidado
+    (SIP), que el plan gratuito permite con 15 min de retraso — suficiente porque
+    solo se usan días ya cerrados — y cae a IEX si no está disponible."""
+    from alpaca.data.enums import Adjustment
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(days=int(limit * 1.5) + 10)   # días hábiles → calendario
+    last_error: Exception | None = None
+    for feed, end in ((DataFeed.SIP, now - timedelta(minutes=16)), (DataFeed.IEX, now)):
+        try:
+            req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=_TF_MAP["1d"],
+                                   start=start, end=end, feed=feed, adjustment=Adjustment.ALL)
+            df = data_client.get_stock_bars(req).df
+        except Exception as e:
+            last_error = e
+            continue
+        if df.empty:
+            continue
+        if isinstance(df.index, pd.MultiIndex):
+            df = df.xs(symbol, level="symbol")
+        df.index = pd.to_datetime(df.index, utc=True)
+        return df[["open", "high", "low", "close", "volume"]].sort_index().tail(limit)
+    if last_error:
+        raise last_error
+    return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+
 def get_latest_trade_price(symbol: str) -> float | None:
     """Devuelve el precio del último trade en tiempo real (independiente de get_stock_bars).
 

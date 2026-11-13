@@ -157,7 +157,7 @@ class CircuitBreaker:
             else:
                 break
 
-        if consecutive >= config.CB_CONSECUTIVE_LOSSES:
+        if 0 < config.CB_CONSECUTIVE_LOSSES <= consecutive:
             reason = (f"{consecutive} trades perdedores consecutivos ≥ "
                       f"{config.CB_CONSECUTIVE_LOSSES}")
             logger.warning(f"[CB] 🚨 CONDICIÓN 3: {reason}")

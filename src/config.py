@@ -164,6 +164,35 @@ USE_TRAILING_STOP   = False
 TRAILING_ACTIVATE_PCT = 0.015
 TRAILING_DISTANCE_PCT = 0.01
 
+# ── Estrategia diaria (STRATEGY_MODE=daily) ───────────────────────────────────
+# "legacy" = estrategia multi-señal en 15m (todo lo de arriba).
+# "daily"  = dos reglas en velas DIARIAS cerradas, elegidas con datos hasta 2023
+#            y verificadas fuera de muestra en 2024–2026 (ver ROADMAP/memoria):
+#   · Crypto — tendencia: comprado mientras el cierre diario > SMA50; sale cuando
+#     el cierre cae por debajo. Peso igual por moneda (capital / nº de símbolos).
+#   · Stocks — compra de caídas: entra si RSI(2) < 15 con cierre > SMA200; sale
+#     cuando el cierre supera la SMA5. Peso igual por acción.
+# La señal usa solo la última vela diaria CERRADA y se ejecuta en el primer ciclo
+# del día siguiente (el backtest ejecuta al open; un día de retraso la degrada).
+STRATEGY_MODE = os.getenv("STRATEGY_MODE", "legacy").lower()
+if STRATEGY_MODE not in ("legacy", "daily"):
+    raise ValueError(f"STRATEGY_MODE inválido: {STRATEGY_MODE!r} (legacy|daily)")
+IS_DAILY = STRATEGY_MODE == "daily"
+
+DAILY_TREND_SMA   = 50      # crypto: media de tendencia
+DAILY_RSI_PERIOD  = 2       # stocks: RSI corto
+DAILY_RSI_ENTRY   = 15      # stocks: entra con RSI(2) por debajo de esto
+DAILY_REGIME_SMA  = 200     # stocks: solo en tendencia alcista de largo plazo
+DAILY_EXIT_SMA    = 5       # stocks: sale al cerrar por encima de esta media
+# Stops de emergencia: amplios a propósito. En backtest casi no cambian el
+# resultado; existen para que la posición tenga un stop en el exchange si el
+# bot se cae. La salida normal es la señal diaria, no el stop.
+DAILY_STOP_PCT_CRYPTO = 0.20
+DAILY_STOP_PCT_STOCK  = 0.10
+# La OCO del exchange exige una pata de take-profit: se pone lejos (+100%) para
+# que en la práctica no se ejecute — estas reglas no tienen objetivo de precio.
+DAILY_TP_PCT = 1.0
+
 # ── Paths ──────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent.parent
 # DB separada para dinero real: los trades de paper/testnet nunca se cargan
@@ -201,7 +230,12 @@ ATR_MULTIPLIER_TP  = 4.0       # TP = entry + ATR_MULT_TP × ATR(14) → ratio 2
 # ── Circuit breaker (Fase 4.2) ────────────────────────────────────────────────
 CB_DAILY_DRAWDOWN_PCT   = 3.0   # pausa si pierde >3% del capital en el día
 CB_TOTAL_LOSS_PCT       = 10.0  # pausa si pierde >10% del capital inicial
-CB_CONSECUTIVE_LOSSES   = 5     # pausa tras 5 trades perdedores consecutivos
+CB_CONSECUTIVE_LOSSES   = 5     # pausa tras 5 trades perdedores consecutivos (0 = desactivado)
+if IS_DAILY:
+    # En tendencia, las 5 monedas salen el mismo día cuando el mercado gira:
+    # 5 pérdidas seguidas es el funcionamiento normal, no una alarma. Quedan
+    # activos los frenos por drawdown diario y pérdida total.
+    CB_CONSECUTIVE_LOSSES = 0
 
 # ── Fees y slippage (realismo en backtest) ────────────────────────────────────
 # Binance spot: 0.1% por lado → 0.2% round-trip.

@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime, timezone
 
+import hmac
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, Header, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, PlainTextResponse
@@ -161,6 +162,10 @@ class ConnectionManager:
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
+        self.active.append(ws)
+
+    def add(self, ws: WebSocket):
+        """Registra un socket ya aceptado y autenticado para recibir broadcasts."""
         self.active.append(ws)
 
     def disconnect(self, ws: WebSocket):
@@ -332,8 +337,25 @@ async def push_heartbeat():
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────────
 
+WS_AUTH_TIMEOUT = 5.0   # segundos para que el cliente mande su token tras conectar
+
+
+async def _ws_authenticate(ws: WebSocket) -> bool:
+    """El token llega como PRIMER MENSAJE ({"type": "auth", "token": ...}), no en
+    la URL: una URL con ?token= queda escrita en los logs de acceso del servidor
+    y del proxy. Los browsers no dejan mandar headers en un WebSocket, así que
+    el primer mensaje es la forma de autenticar sin exponerlo."""
+    try:
+        raw = await asyncio.wait_for(ws.receive_text(), timeout=WS_AUTH_TIMEOUT)
+        msg = json.loads(raw)
+    except (asyncio.TimeoutError, ValueError, WebSocketDisconnect):
+        return False
+    token = msg.get("token") if isinstance(msg, dict) and msg.get("type") == "auth" else None
+    return isinstance(token, str) and hmac.compare_digest(token.encode(), DASHBOARD_TOKEN.encode())
+
+
 @app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket, token: str | None = None):
+async def websocket_endpoint(ws: WebSocket):
     # Validar Origin contra allowlist (anti Cross-Site WebSocket Hijacking)
     origin = ws.headers.get("origin")
     host   = ws.headers.get("host")
@@ -342,17 +364,18 @@ async def websocket_endpoint(ws: WebSocket, token: str | None = None):
                        origin, host, ALLOWED_ORIGINS)
         await ws.close(code=1008, reason="origin not allowed")
         return
-    # Validar token
-    if DASHBOARD_TOKEN:
-        if token != DASHBOARD_TOKEN:
-            logger.warning("WS rechazado por token inválido (origin=%r)", origin)
-            await ws.close(code=1008, reason="invalid token")
-            return
-    elif not ALLOW_NO_AUTH:
+    if not DASHBOARD_TOKEN and not ALLOW_NO_AUTH:
         await ws.close(code=1008, reason="auth not configured")
         return
 
-    await manager.connect(ws)
+    # Se acepta la conexión y recién después se valida el token (primer mensaje).
+    # Hasta autenticar no se registra en el manager: no recibe ningún broadcast.
+    await ws.accept()
+    if DASHBOARD_TOKEN and not await _ws_authenticate(ws):
+        logger.warning("WS rechazado por token inválido o ausente (origin=%r)", origin)
+        await ws.close(code=1008, reason="invalid token")
+        return
+    manager.add(ws)
     logger.info("WS connect accepted, building initial data...")
     try:
         # Ejecutar los 4 builders EN PARALELO (gather) en lugar de uno tras otro.

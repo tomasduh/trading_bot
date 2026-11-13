@@ -71,6 +71,21 @@ def position_size(capital_usdt: float, entry_price: float, symbol: str | None = 
         max_qty_by_capital = (capital_usdt * config.MAX_POSITION_PCT_OF_CAPITAL) / entry_price
         qty_raw = min(qty_raw, max_qty_by_capital)
 
+    return _apply_limits(qty_raw, entry_price, symbol, fractional)
+
+
+def size_for_notional(notional: float, entry_price: float, symbol: str | None = None,
+                      fractional: bool = False) -> float:
+    """Cantidad para invertir `notional` (USD/USDT) en un símbolo, respetando sus
+    límites. Modo diario: cada símbolo recibe una fracción fija del capital."""
+    if entry_price <= 0 or notional <= 0:
+        return 0.0
+    return _apply_limits(notional / entry_price, entry_price, symbol, fractional)
+
+
+def _apply_limits(qty_raw: float, entry_price: float, symbol: str | None,
+                  fractional: bool) -> float:
+    """Redondea qty_raw hacia abajo al step del símbolo; 0 si no llega a los mínimos."""
     if not symbol:
         limits = _SYMBOL_LIMITS["BTC/USDT"]
     else:
@@ -134,6 +149,11 @@ def take_profit_price_atr(entry_price: float, atr: float,
 def get_sl_tp(entry_price: float, atr: float = 0.0,
               symbol: str | None = None) -> tuple[float, float]:
     """Helper unificado: devuelve (sl, tp) según USE_ATR_STOPS."""
+    if config.IS_DAILY:
+        # Stop de emergencia amplio + TP lejano (la salida real es la señal diaria)
+        stop_pct = config.DAILY_STOP_PCT_STOCK if (symbol and "/" not in symbol)             else config.DAILY_STOP_PCT_CRYPTO
+        return (_round_price(entry_price * (1 - stop_pct), symbol),
+                _round_price(entry_price * (1 + config.DAILY_TP_PCT), symbol))
     if config.USE_ATR_STOPS and atr > 0:
         return (stop_loss_price_atr(entry_price, atr, symbol),
                 take_profit_price_atr(entry_price, atr, symbol))

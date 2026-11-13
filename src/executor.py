@@ -110,6 +110,10 @@ class TradeExecutor:
         configured = set(config.CRYPTO_SYMBOLS) | set(config.STOCK_SYMBOLS)
         return [s for s in self.open_symbols(stocks) if s not in configured]
 
+    def open_trades(self) -> list[Trade]:
+        """Todos los trades abiertos (crypto y stocks)."""
+        return [t for t in self._open_trades.values() if t is not None]
+
     def has_open_trade(self, symbol: str) -> bool:
         return self._open_trades.get(symbol) is not None
 
@@ -159,13 +163,41 @@ class TradeExecutor:
 
     # ── Apertura ──────────────────────────────────────────────────────────────
 
-    def open_trade(self, symbol: str, signal: Signal, capital_usdt: float) -> Trade | None:
+    def target_notional(self, free_capital: float, stocks: bool) -> float:
+        """Modo diario: lo que le toca a cada símbolo = capital del mercado (libre
+        + invertido) / nº de símbolos, sin pasarse de lo que queda libre. El 2% de
+        margen cubre fees y el deslizamiento de la orden a mercado."""
+        n = len(config.STOCK_SYMBOLS if stocks else config.CRYPTO_SYMBOLS)
+        if n == 0:
+            return 0.0
+        per_symbol = (free_capital + self.open_notional(stocks)) / n
+        return max(0.0, min(per_symbol, free_capital) * 0.98)
+
+    def last_exit_time(self, symbol: str) -> datetime | None:
+        """Cierre más reciente del símbolo (UTC), para no reentrar con la misma vela diaria."""
+        with get_session() as session:
+            t = (session.query(Trade)
+                 .filter(Trade.symbol == symbol, Trade.status == "CLOSED", Trade.exit_time.isnot(None))
+                 .order_by(Trade.exit_time.desc()).first())
+            ts = t.exit_time if t else None
+        if ts is not None and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts
+
+    def open_trade(self, symbol: str, signal: Signal, capital_usdt: float,
+                   notional: float | None = None) -> Trade | None:
+        """notional: si se pasa, se invierte ese importe (modo diario) en vez de
+        dimensionar por riesgo/stop."""
         if self.has_open_trade(symbol):
             logger.warning(f"[{symbol}] Ya hay trade abierto. Ignorando BUY.")
             return None
 
-        qty = risk_manager.position_size(capital_usdt, signal.price, symbol,
-                                         fractional=_stock_fractional(symbol))
+        if notional is not None:
+            qty = risk_manager.size_for_notional(notional, signal.price, symbol,
+                                                 fractional=_stock_fractional(symbol))
+        else:
+            qty = risk_manager.position_size(capital_usdt, signal.price, symbol,
+                                             fractional=_stock_fractional(symbol))
         atr = getattr(signal, "atr", 0.0) or 0.0
         sl, tp = risk_manager.get_sl_tp(signal.price, atr, symbol)
 

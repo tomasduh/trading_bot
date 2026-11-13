@@ -15,11 +15,20 @@ const TRADES_PAGE_SIZE = 10;
 const STALE_THRESHOLD_MS = 30_000;  // sin heartbeat 30s → mostrar "stale"
 
 // Token de auth — se acepta vía:
-//   1) URL: ?token=XXX  (se guarda en localStorage y se limpia de la URL)
-//   2) localStorage.setItem('dashboard_token', 'XXX')
-//   3) prompt si no hay token
+//   1) URL: #token=XXX  (recomendado: lo que va tras # no se envía al servidor,
+//      así que no queda en sus logs; se guarda en localStorage y se limpia)
+//   2) URL: ?token=XXX  (compatibilidad; OJO: queda en los logs de acceso)
+//   3) localStorage.setItem('dashboard_token', 'XXX')
+//   4) prompt si no hay token
 function _resolveToken() {
   try {
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const fromHash = hash.get('token');
+    if (fromHash) {
+      localStorage.setItem('dashboard_token', fromHash);
+      window.history.replaceState({}, '', window.location.pathname + window.location.search);
+      return fromHash;
+    }
     const params = new URLSearchParams(window.location.search);
     const fromUrl = params.get('token');
     if (fromUrl) {
@@ -412,10 +421,11 @@ function setConnStatus(connected) {
 function connect() {
   if (reconnectTimer) clearTimeout(reconnectTimer);
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const tokenParam = DASHBOARD_TOKEN ? `?token=${encodeURIComponent(DASHBOARD_TOKEN)}` : '';
-  ws = new WebSocket(`${proto}://${location.host}/ws${tokenParam}`);
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
 
   ws.onopen = () => {
+    // El token va como primer mensaje, nunca en la URL (quedaría en los logs).
+    ws.send(JSON.stringify({ type: 'auth', token: DASHBOARD_TOKEN }));
     setConnStatus(true);
     setStale(false);
     lastHeartbeat = Date.now();
@@ -445,8 +455,16 @@ function connect() {
     }
   };
 
-  ws.onclose = () => {
+  ws.onclose = (ev) => {
     setConnStatus(false);
+    if (ev.code === 1008) {
+      // Token rechazado: reintentar con el mismo no sirve. Se olvida y se pide
+      // de nuevo al recargar la página.
+      try { localStorage.removeItem('dashboard_token'); } catch (e) { /* sin storage */ }
+      const lbl = document.getElementById('conn-label');
+      if (lbl) lbl.textContent = 'Token inválido — recarga la página';
+      return;
+    }
     reconnectTimer = setTimeout(connect, 3000);
   };
 

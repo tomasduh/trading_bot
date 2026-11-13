@@ -75,6 +75,34 @@ def fetch_ohlcv(symbol: str = config.SYMBOL,
     return df
 
 
+BINANCE_PUBLIC_KLINES = "https://api.binance.com/api/v3/klines"
+
+
+def fetch_daily(symbol: str, limit: int = 80) -> pd.DataFrame:
+    """Velas DIARIAS del mercado real (endpoint público de Binance, sin claves).
+
+    No usa el exchange del bot a propósito: en testnet solo hay ~1 mes de velas
+    diarias (se resetea), insuficiente para una SMA50, y sus precios no son los
+    del mercado. La señal diaria se calcula siempre sobre el mercado real; las
+    órdenes siguen yendo al exchange configurado (testnet o live). Con `requests`
+    directo para no cargar una segunda instancia de ccxt en la VM de 512MB."""
+    import requests
+    try:
+        resp = requests.get(
+            BINANCE_PUBLIC_KLINES,
+            params={"symbol": symbol.replace("/", ""), "interval": "1d", "limit": limit},
+            timeout=REQUEST_TIMEOUT_MS / 1000,
+        )
+        resp.raise_for_status()
+        raw = resp.json()
+    except Exception as e:
+        raise DataFetchError(f"velas diarias {symbol}: {e}") from e
+    df = pd.DataFrame([r[:6] for r in raw],
+                      columns=["timestamp", "open", "high", "low", "close", "volume"]).astype(float)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+    return df.set_index("timestamp").sort_index()
+
+
 def fetch_balance() -> dict:
     return _wrap_call(_get_exchange().fetch_balance)
 

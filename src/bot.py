@@ -28,6 +28,64 @@ def is_paused() -> bool:
     return PAUSE_FILE.exists()
 
 
+# ── Resumen diario por Telegram ───────────────────────────────────────────────
+# Con una estrategia diaria la mayoría de los días no pasa nada: el resumen
+# confirma que el bot sigue vivo y cómo va, sin tener que abrir el dashboard.
+SUMMARY_TIME_UTC = (21, 15)    # después del cierre de Wall Street (16:00 ET)
+SUMMARY_MARKER = config.BASE_DIR / "data" / ".last_summary"
+_last_prices: dict[str, float] = {}     # último precio visto por símbolo
+
+
+def maybe_daily_summary(executor, now: datetime | None = None) -> bool:
+    """Envía el resumen una vez por día, pasada la hora configurada."""
+    if not alerts.enabled():
+        return False
+    now = now or datetime.now(timezone.utc)
+    if (now.hour, now.minute) < SUMMARY_TIME_UTC:
+        return False
+    today = now.date().isoformat()
+    try:
+        if SUMMARY_MARKER.exists() and SUMMARY_MARKER.read_text().strip() == today:
+            return False
+        SUMMARY_MARKER.write_text(today)
+    except OSError:
+        return False
+    try:
+        alerts.notify_daily_summary(**build_daily_summary(executor, now))
+        return True
+    except Exception as e:
+        logger.warning(f"Resumen diario falló: {e}")
+        return False
+
+
+def build_daily_summary(executor, now: datetime) -> dict:
+    """Datos del resumen: cerradas hoy (UTC), abiertas con su flotante y acumulado.
+    Con tope de capital activo solo cuentan los trades posteriores al tope."""
+    from src.database import Trade
+
+    def aware(dt):
+        return dt if dt is None or dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    with get_session() as s:
+        closed = [dict(symbol=t.symbol, pnl_usdt=t.pnl_usdt, pnl_pct=t.pnl_pct, exit_time=aware(t.exit_time))
+                  for t in s.query(Trade).filter(Trade.status == "CLOSED").all() if budget.counts(t)]
+    today = sorted((t for t in closed if t["exit_time"] and t["exit_time"] >= day_start),
+                   key=lambda t: t["exit_time"])
+    return {
+        "day": now.strftime("%d/%m/%Y"),
+        "closed_today": [{k: t[k] for k in ("symbol", "pnl_usdt", "pnl_pct")} for t in today],
+        "open_positions": [{"symbol": t.symbol, "entry": t.entry_price, "qty": t.quantity,
+                            "price": _last_prices.get(t.symbol), "opened_at": t.entry_time}
+                           for t in executor.open_trades()],
+        "realized_total": sum(t["pnl_usdt"] or 0 for t in closed),
+        "capital": total_capital(executor),
+        "paused": is_paused(),
+        "strategy": config.STRATEGY_MODE,
+        "now": now,
+    }
+
+
 def persist_candle(symbol: str, df_ind):
     """Persiste la última vela cerrada. Idempotente: el UNIQUE index
     (symbol, timestamp) evita duplicados si el ciclo vuelve a correr antes
@@ -194,6 +252,7 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
 
         df_ind = indicators.add_all(df)
         live_price = float(df_ind["close"].iloc[-1])
+        _last_prices[symbol] = live_price
         ind_snap = _indicator_snapshot(df_ind)
         if ind_snap is None:
             logger.warning(f"  {symbol:<{width}} indicadores en warmup")
@@ -213,8 +272,10 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
                               trade_action="CLOSED", symbol=symbol)
             return 0.0
 
-        # 2. Evaluar señal — multi-timeframe si está habilitado
-        if config.USE_MTF:
+        # 2. Evaluar señal — diaria, o multi-timeframe si está habilitado
+        if config.IS_DAILY:
+            signal = daily_signal(symbol, fetcher, width)
+        elif config.USE_MTF:
             df_macro = None
             try:
                 df_macro = fetcher.fetch_ohlcv(
@@ -245,21 +306,28 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
 
         if signal.type == "BUY" and allow_entries and not executor.has_open_trade(symbol):
             # ── Cap de exposición del mercado (crypto y stocks por separado) ──
-            exposure = executor.total_exposure_pct(capital, stocks=(label == "STOCK"))
-            if exposure >= config.MAX_TOTAL_EXPOSURE_PCT:
+            # Modo diario: no aplica (cada símbolo tiene su fracción fija del capital).
+            exposure = 0.0 if config.IS_DAILY else \
+                executor.total_exposure_pct(capital, stocks=(label == "STOCK"))
+            notional = executor.target_notional(capital, stocks=(label == "STOCK")) \
+                if config.IS_DAILY else None
+            if config.IS_DAILY and _already_traded_this_bar(symbol, executor, signal):
+                logger.info(f"  {symbol:<{width}} BUY omitido — ya se salió con esta misma vela diaria")
+            elif exposure >= config.MAX_TOTAL_EXPOSURE_PCT:
                 logger.warning(
                     f"  {symbol:<{width}} BUY bloqueado — exposición {label.lower()} "
                     f"{exposure*100:.1f}% ≥ {config.MAX_TOTAL_EXPOSURE_PCT*100:.0f}%"
                 )
             elif capital > 10:
-                trade = executor.open_trade(symbol, signal, capital)
+                trade = executor.open_trade(symbol, signal, capital, notional=notional)
                 if trade:
                     trade_action = "OPENED"
                     acted = True
                     notional_committed = trade.entry_price * trade.quantity
                     alerts.notify_trade_opened(symbol, trade.entry_price,
                                                 trade.quantity, trade.stop_loss,
-                                                trade.take_profit, signal.reason)
+                                                trade.take_profit, signal.reason,
+                                                trade_id=getattr(trade, "id", None))
                     # Feature logging: vector completo en el momento de la entrada
                     ml_features = _extract_ml_features(df_ind, signal, live_price)
                     if ml_features:
@@ -275,28 +343,20 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
 
         elif (signal.type == "SELL"
               and executor.has_open_trade(symbol)
-              and not config.DISABLE_SIGNAL_EXIT):
+              and (config.IS_DAILY or not config.DISABLE_SIGNAL_EXIT)):
             # Cambio quirúrgico v2: SIGNAL solo cierra si hay pérdida REAL (con buffer)
+            # Modo diario: la señal de salida cierra siempre (es la salida de la regla).
             open_trade = executor.get_open_trade(symbol)
             entry = (open_trade.entry_price if open_trade else live_price) or live_price
             loss_threshold = entry * (1 - config.SIGNAL_EXIT_LOSS_BUFFER_PCT)
             in_real_loss = live_price < loss_threshold
             closed = None
-            if not config.SIGNAL_EXIT_ONLY_IN_LOSS or in_real_loss:
+            if config.IS_DAILY or not config.SIGNAL_EXIT_ONLY_IN_LOSS or in_real_loss:
                 closed = executor.close_trade(symbol, live_price, "SIGNAL")
             if closed:
                 trade_action = "CLOSED"
                 acted = True
-                alerts.notify_trade_closed(symbol, closed.entry_price, closed.exit_price,
-                                            closed.pnl_usdt or 0, closed.pnl_pct or 0,
-                                            closed.exit_reason)
-                # Feature logging: outcome
-                analyst.log_outcome(
-                    trade_id=closed.id, symbol=symbol,
-                    exit_reason=closed.exit_reason,
-                    pnl_pct=closed.pnl_pct or 0,
-                    pnl_usdt=closed.pnl_usdt or 0,
-                )
+                _notify_closed(symbol, closed)
 
         persist_signal(symbol, signal, acted)
         analyst.log_cycle(live_price, ind_snap, signal,
@@ -308,6 +368,26 @@ def process_market(symbol: str, executor: TradeExecutor, capital: float,
     except Exception as e:
         logger.error(f"  [{symbol}] Error inesperado: {e}", exc_info=True)
     return 0.0
+
+
+def daily_signal(symbol: str, fetcher, width: int = 12):
+    """Señal de la estrategia diaria. Si no se pueden traer las velas diarias
+    devuelve NONE: sin datos no se entra ni se sale por señal (queda el stop)."""
+    try:
+        return strategy.evaluate_daily(symbol, fetcher.fetch_daily(symbol))
+    except Exception as e:
+        logger.warning(f"  {symbol:<{width}} velas diarias no disponibles ({e}) — sin señal este ciclo")
+        return strategy.Signal("NONE", f"velas diarias no disponibles: {e}", 0, 0, 0, 0, 0)
+
+
+def _already_traded_this_bar(symbol: str, executor: TradeExecutor, signal) -> bool:
+    """¿Ya se cerró un trade de este símbolo desde que cerró la vela de la señal?
+    Evita recomprar el mismo día tras un stop (la señal BUY sigue vigente hasta
+    la próxima vela diaria)."""
+    if signal.valid_from is None:
+        return False
+    last_exit = executor.last_exit_time(symbol)
+    return last_exit is not None and last_exit >= signal.valid_from
 
 
 def manage_exits(symbol: str, executor: TradeExecutor, live_price: float) -> bool:
@@ -334,7 +414,11 @@ def manage_exits(symbol: str, executor: TradeExecutor, live_price: float) -> boo
 def _notify_closed(symbol: str, closed):
     alerts.notify_trade_closed(symbol, closed.entry_price, closed.exit_price,
                                 closed.pnl_usdt or 0, closed.pnl_pct or 0,
-                                closed.exit_reason)
+                                closed.exit_reason,
+                                qty=getattr(closed, "quantity", None),
+                                opened_at=getattr(closed, "entry_time", None),
+                                closed_at=getattr(closed, "exit_time", None),
+                                trade_id=getattr(closed, "id", None))
     # Feature logging: registrar outcome del trade
     analyst.log_outcome(
         trade_id=closed.id, symbol=symbol,
@@ -383,8 +467,17 @@ def check_exits_only(symbol: str, executor: TradeExecutor, fetcher, label: str =
             logger.warning(f"  {symbol:<{width}} sin datos — SL/TP no chequeado")
             return
         live_price = float(df["close"].iloc[-1])
-        if not manage_exits(symbol, executor, live_price):
-            logger.info(f"  {symbol:<{width}} @ {live_price:>10,.2f} | posición abierta, SL/TP OK")
+        _last_prices[symbol] = live_price
+        if manage_exits(symbol, executor, live_price):
+            return
+        # Modo diario: la salida normal es la señal, no el stop. Pausado tampoco
+        # puede quedar una posición esperando solo el stop de emergencia.
+        if config.IS_DAILY and daily_signal(symbol, fetcher, width).type == "SELL":
+            closed = executor.close_trade(symbol, live_price, "SIGNAL")
+            if closed:
+                _notify_closed(symbol, closed)
+                return
+        logger.info(f"  {symbol:<{width}} @ {live_price:>10,.2f} | posición abierta, SL/TP OK")
     except DataFetchError as e:
         logger.warning(f"  [{symbol}] Error temporal de datos (pausa): {e}")
     except Exception as e:
@@ -454,6 +547,9 @@ def run_cycle(executor: TradeExecutor, initial_capital: float = 10_000.0):
     if is_paused():
         logger.info("⏸  Bot pausado (existe data/.paused) — sin entradas, solo SL/TP de posiciones abiertas.")
         manage_exits_while_paused(executor)
+        # Pausado no es caído: el ciclo corrió y vigiló las salidas. Sin este
+        # ping el watchdog externo alertaría "bot caído" durante cada pausa.
+        _ping_watchdog()
         gc.collect()
         return
 
@@ -466,10 +562,14 @@ def run_cycle(executor: TradeExecutor, initial_capital: float = 10_000.0):
     should_pause, cb_reason = breaker.check(total_capital(executor))
     if should_pause:
         logger.critical(f"🚨 CIRCUIT BREAKER activado: {cb_reason}")
-        alerts.notify_error(f"🚨 Circuit breaker: {cb_reason}\nBot pausado automáticamente.")
+        alerts.notify_critical(
+            "Circuit breaker — bot pausado", cb_reason,
+            action="revisar las posiciones y reanudar desde el dashboard cuando corresponda. "
+                   "Mientras tanto no abre nada nuevo; las salidas siguen activas.")
         PAUSE_FILE.parent.mkdir(parents=True, exist_ok=True)
         PAUSE_FILE.touch()
         manage_exits_while_paused(executor)
+        _ping_watchdog()
         return
 
     # ── Reconciliación: DB vs exchange ────────────────────────────────────────
@@ -541,7 +641,7 @@ def run_bot_forever():
         logger.warning(f"⚠ {w}")
     logger.info(f"Crypto: {', '.join(config.CRYPTO_SYMBOLS)}")
     logger.info(f"Stocks: {', '.join(config.STOCK_SYMBOLS)} (solo horario mercado)")
-    logger.info(f"Timeframe: {config.TIMEFRAME}")
+    logger.info(f"Timeframe: {config.TIMEFRAME} | Estrategia: {config.STRATEGY_MODE}")
     logger.info(f"Filtro tendencia: {'ACTIVO' if config.USE_TREND_FILTER else 'inactivo'}")
     logger.info("=" * 55)
 
@@ -558,11 +658,12 @@ def run_bot_forever():
             if budget.cap(st) > 0]
     n_open = len(executor.open_symbols(stocks=False)) + len(executor.open_symbols(stocks=True))
     alerts.notify_info(
-        f"Bot iniciado — {config.mode_label()} | "
-        f"{len(config.CRYPTO_SYMBOLS)} crypto + {len(config.STOCK_SYMBOLS)} stocks | "
-        f"{n_open} posiciones abiertas"
-        + (f" | tope: {', '.join(caps)} (desde {budget.since():%Y-%m-%d %H:%M} UTC)" if caps else "")
-        + (" | ⏸ PAUSADO" if is_paused() else "")
+        f"Bot iniciado — Binance {config.BINANCE_MODE}, Alpaca {config.ALPACA_MODE}\n"
+        f"Estrategia: {config.STRATEGY_MODE} · {len(config.CRYPTO_SYMBOLS)} crypto + "
+        f"{len(config.STOCK_SYMBOLS)} stocks\n"
+        f"Posiciones abiertas: {n_open}"
+        + (f"\nTope de capital: {', '.join(caps)}" if caps else "")
+        + ("\n⏸ Arranca PAUSADO" if is_paused() else "")
     )
     for w in config.MODE_WARNINGS:
         alerts.notify_error(w)
@@ -574,6 +675,7 @@ def run_bot_forever():
             consecutive_fatal = 0
             last_cycle_error = None
             backup.maybe_backup()
+            maybe_daily_summary(executor)
         except KeyboardInterrupt:
             logger.info("Bot detenido por el usuario.")
             break
@@ -583,7 +685,11 @@ def run_bot_forever():
             alerts.notify_error(f"Error fatal de datos: {e}")
             if consecutive_fatal >= MAX_CONSECUTIVE_ERRORS:
                 logger.critical("KILL-SWITCH ACTIVADO — demasiados errores fatales. Deteniendo bot.")
-                alerts.notify_error("🚨 KILL-SWITCH: bot detenido por errores fatales")
+                alerts.notify_critical(
+                    "Kill-switch — bot detenido",
+                    f"{consecutive_fatal} errores fatales de datos seguidos. Último: {e}",
+                    action="revisar claves o bloqueo de IP del exchange y reiniciar la máquina en Fly. "
+                           "Los stops colocados en el exchange siguen vigentes.")
                 break
         except Exception as e:
             logger.error(f"Error en ciclo: {e}", exc_info=True)

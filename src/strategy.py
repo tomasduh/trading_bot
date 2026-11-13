@@ -18,6 +18,7 @@ SEÑALES SELL (necesita 2 de 3):
 IMPORTANTE: usamos iloc[-2] (última vela CERRADA) para evitar look-ahead bias.
 """
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 from src import config
 from src import indicators
@@ -37,6 +38,7 @@ class Signal:
     trend: str = "neutral"     # "up" | "down" | "neutral"
     adx: float = 0.0
     atr: float = 0.0           # Average True Range de la última vela cerrada
+    valid_from: datetime | None = None   # modo diario: cierre de la vela que generó la señal
 
 
 def _none_signal(price, rsi, ema_fast, ema_slow, macd_hist, reason,
@@ -201,3 +203,70 @@ def evaluate(df: pd.DataFrame) -> Signal:
         macd_hist=macd_hist, score=0,
         trend=trend, adx=round(adx, 1), atr=round(atr, 6),
     )
+
+
+# ── Modo diario (config.STRATEGY_MODE == "daily") ─────────────────────────────
+
+def _rsi_wilder(close: pd.Series, period: int) -> pd.Series:
+    delta = close.diff()
+    up = delta.clip(lower=0).ewm(alpha=1 / period, adjust=False).mean()
+    down = (-delta.clip(upper=0)).ewm(alpha=1 / period, adjust=False).mean()
+    return 100 - 100 / (1 + up / down)
+
+
+def closed_daily_bars(df: pd.DataFrame, is_stock: bool, now: datetime | None = None) -> pd.DataFrame:
+    """Quita la vela diaria en curso: la señal solo usa días ya cerrados.
+    Crypto: una vela cierra 24h después de su apertura (UTC). Stocks: la vela de
+    hoy (fecha de Nueva York) se descarta siempre — el bot solo opera stocks con
+    el mercado abierto, cuando esa vela todavía se está formando."""
+    if df.empty:
+        return df
+    now = now or datetime.now(timezone.utc)
+    last = df.index[-1]
+    if is_stock:
+        today_et = pd.Timestamp(now).tz_convert("America/New_York").date()
+        in_progress = last.tz_convert("America/New_York").date() >= today_et
+    else:
+        in_progress = last + timedelta(days=1) > now
+    return df.iloc[:-1] if in_progress else df
+
+
+def evaluate_daily(symbol: str, df_daily: pd.DataFrame, now: datetime | None = None) -> Signal:
+    """Señal de la estrategia diaria para un símbolo (ver config: STRATEGY_MODE).
+    BUY = condición de entrada vigente; SELL = salir; NONE = mantener lo que haya."""
+    is_stock = "/" not in symbol
+    df = closed_daily_bars(df_daily, is_stock, now)
+    need = (config.DAILY_REGIME_SMA if is_stock else config.DAILY_TREND_SMA) + 1
+    if len(df) < need:
+        return Signal("NONE", f"historia diaria insuficiente ({len(df)}/{need} velas)", 0, 0, 0, 0, 0)
+
+    close = df["close"].astype(float)
+    price = float(close.iloc[-1])
+    valid_from = (df.index[-1] + timedelta(days=1)).to_pydatetime()
+
+    if is_stock:
+        rsi = float(_rsi_wilder(close, config.DAILY_RSI_PERIOD).iloc[-1])
+        regime = float(close.rolling(config.DAILY_REGIME_SMA).mean().iloc[-1])
+        exit_ma = float(close.rolling(config.DAILY_EXIT_SMA).mean().iloc[-1])
+        trend = "up" if price > regime else "down"
+        if price > exit_ma:
+            typ, reason = "SELL", f"cierre {price:.2f} > SMA{config.DAILY_EXIT_SMA} {exit_ma:.2f}"
+        elif rsi < config.DAILY_RSI_ENTRY and price > regime:
+            typ, reason = "BUY", (f"RSI({config.DAILY_RSI_PERIOD}) {rsi:.0f} < {config.DAILY_RSI_ENTRY} "
+                                  f"y cierre > SMA{config.DAILY_REGIME_SMA}")
+        else:
+            typ, reason = "NONE", f"sin señal (RSI({config.DAILY_RSI_PERIOD}) {rsi:.0f}, tendencia {trend})"
+        return Signal(typ, reason, price, rsi, exit_ma, regime, 0.0,
+                      score=1 if typ != "NONE" else 0, trend=trend, valid_from=valid_from)
+
+    sma = float(close.rolling(config.DAILY_TREND_SMA).mean().iloc[-1])
+    if price > sma:
+        typ, trend = "BUY", "up"
+        reason = f"cierre {price:,.2f} > SMA{config.DAILY_TREND_SMA} {sma:,.2f}"
+    elif price < sma:
+        typ, trend = "SELL", "down"
+        reason = f"cierre {price:,.2f} < SMA{config.DAILY_TREND_SMA} {sma:,.2f}"
+    else:
+        typ, trend, reason = "NONE", "neutral", "cierre = SMA"
+    return Signal(typ, reason, price, 0.0, sma, sma, 0.0,
+                  score=1 if typ != "NONE" else 0, trend=trend, valid_from=valid_from)

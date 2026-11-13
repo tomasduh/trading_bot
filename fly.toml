@@ -9,6 +9,9 @@ primary_region = "fra"       # Frankfurt — Binance no bloquea IPs cloud europe
 
 [env]
   TRADING_MODE = "testnet"
+  # "daily" = tendencia SMA50 (crypto) + compra de caídas RSI2 (stocks) en velas
+  # diarias; "legacy" = estrategia multi-señal en 15m. Ver src/config.py.
+  STRATEGY_MODE = "daily"
 
 # ── Servicio HTTP (dashboard) ────────────────────────────────────────────────
 [http_service]
